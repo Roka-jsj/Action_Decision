@@ -41,13 +41,25 @@ def check(path):
 
     # 4) 토크나이저/코드 파일 존재(트랜스포머 제출인 경우)
     if any("ad_lib.py" in n for n in names):
-        for req in ["model/ad_lib.py", "model/config.json", "model/run_meta.json"]:
+        import json as _json
+        for req in ["model/ad_lib.py", "model/run_meta.json"]:
             good(f"{req} 존재") if req in names else bad(f"{req} 누락")
-        spm = any(n.endswith((".model", ".json")) and "token" in n.lower() for n in names) or \
-              any(n.endswith("sentencepiece.bpe.model") for n in names)
-        good("토크나이저 파일 포함") if spm else bad("토크나이저 파일(spm/tokenizer.json) 누락 위험")
-        st = any(n.endswith(".safetensors") for n in names)
-        good("safetensors 가중치 포함") if st else bad("safetensors 없음(용량/호환 위험)")
+        rm = _json.loads(z.read("model/run_meta.json")) if "model/run_meta.json" in names else {}
+        # 앙상블이면 멤버 디렉터리별, 아니면 model/ 루트 검사
+        roots = [f"model/{e['dir']}/" for e in rm.get("ensemble", [])] or ["model/"]
+        for r in roots:
+            sub = [n for n in names if n.startswith(r)]
+            if any(n.endswith("coef.npy") for n in sub):   # ngram 멤버
+                good(f"{r} ngram 멤버(coef/intercept)"); continue
+            good(f"{r}config.json 존재") if f"{r}config.json" in names else bad(f"{r}config.json 누락")
+            spm = any(n.endswith((".model", ".json")) and "token" in n.lower() for n in sub) or \
+                  any(n.endswith("sentencepiece.bpe.model") for n in sub)
+            good(f"{r} 토크나이저 포함") if spm else bad(f"{r} 토크나이저(spm/tokenizer.json) 누락 위험")
+            st = any(n.endswith(".safetensors") or n.endswith("qweights.npz") for n in sub)
+            good(f"{r} 가중치(safetensors|qweights.npz) 포함") if st else bad(f"{r} 가중치 없음")
+        if rm.get("weights"):
+            ws = rm["weights"]
+            good(f"멤버 가중치 {ws}") if abs(sum(ws)) > 1e-9 and len(ws) == len(rm.get("ensemble", [])) else bad(f"weights 불일치 {ws}")
 
     print("=> 결과:", "PASS ✅" if ok else "FAIL ❌")
     return ok

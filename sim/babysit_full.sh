@@ -2,7 +2,7 @@
 # babysit_full.sh <TAG> <MODEL> <EPOCHS> <LR> <BATCH> <PRUNE> — FULL-70k 멤버 1개 학습·회수.
 # member_<TAG>.zip 로컬 존재 시 즉시 성공 종료. 세션 사망 시 처음부터 재기동(가중치 증분 불가), 최대 4회.
 cd /home/vasebull/action_decision
-TAG=$1; MODEL=$2; EPOCHS=$3; LR=$4; BATCH=$5; PRUNE=$6; VER=${7:-v4}; GPU=${8:-A100}
+TAG=$1; MODEL=$2; EPOCHS=$3; LR=$4; BATCH=$5; PRUNE=$6; VER=${7:-v4}; GPU=${8:-A100}; SEED=${9:-1234}; SWAK=${10:-0}; SOFT=${11:-}
 EXPD=action_decision_maximum/experiments
 DEST=$EXPD/member_${TAG}.zip
 
@@ -22,7 +22,12 @@ for ATTEMPT in 1 2 3 4; do
 
   for f in open.zip ad_common.zip; do timeout 200 colab upload -s $S $f /content/$f 2>&1 | tail -1; done
   timeout 90 colab upload -s $S action_decision_maximum/src/train_full_cli.py /content/train_full_cli.py 2>&1 | tail -1
-  printf 'import subprocess, os\nos.chdir("/content")\nenv=dict(os.environ, AD_MODEL="%s", AD_VERSION="%s", AD_MAXLEN="320", AD_EPOCHS="%s", AD_LR="%s", AD_BATCH="%s", AD_LLRD="1", AD_SEED="1234", AD_PRUNE="%s", AD_TAG="%s", TOKENIZERS_PARALLELISM="false")\np=subprocess.Popen(["python","/content/train_full_cli.py"], stdout=open("/content/train.log","w"), stderr=subprocess.STDOUT, env=env)\nprint("launched", p.pid)\n' "$MODEL" "$VER" "$EPOCHS" "$LR" "$BATCH" "$PRUNE" "$TAG" | timeout 120 colab exec -s $S 2>&1 | tail -1
+  SOFTENV=""
+  if [ -n "$SOFT" ]; then
+    timeout 300 colab upload -s $S $EXPD/$SOFT /content/$SOFT 2>&1 | tail -1
+    SOFTENV="/content/$SOFT"
+  fi
+  printf 'import subprocess, os\nos.chdir("/content")\nenv=dict(os.environ, AD_MODEL="%s", AD_VERSION="%s", AD_MAXLEN="320", AD_EPOCHS="%s", AD_LR="%s", AD_BATCH="%s", AD_LLRD="1", AD_SEED="%s", AD_SWA_K="%s", AD_SOFT="%s", AD_PRUNE="%s", AD_TAG="%s", TOKENIZERS_PARALLELISM="false")\np=subprocess.Popen(["python","/content/train_full_cli.py"], stdout=open("/content/train.log","w"), stderr=subprocess.STDOUT, env=env)\nprint("launched", p.pid)\n' "$MODEL" "$VER" "$EPOCHS" "$LR" "$BATCH" "$SEED" "$SWAK" "$SOFTENV" "$PRUNE" "$TAG" | timeout 120 colab exec -s $S 2>&1 | tail -1
   echo "### $S launched FULL $TAG ($MODEL ep=$EPOCHS attempt=$ATTEMPT) ###"
 
   MISS=0

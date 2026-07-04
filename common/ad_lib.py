@@ -140,6 +140,22 @@ def _turn_bin(v):
     return "1" if v <= 1 else "2-3" if v <= 3 else "4-7" if v <= 7 else "8+"
 
 
+def _elapsed_bin(v):
+    """v7 [PACE]: elapsed_session_sec 8분위 근사 bin (탐색클러스터 판별 신호 실측 기반)."""
+    if v is None or v < 0: return "na"
+    for e, name in ((120, "e0"), (250, "e1"), (400, "e2"), (550, "e3"), (700, "e4"), (950, "e5")):
+        if v <= e: return name
+    return "e6"
+
+
+def _pace_bin(elapsed, turn):
+    if elapsed is None or elapsed < 0: return "na"
+    p = elapsed / max(float(turn), 1.0) if turn is not None else elapsed
+    for e, name in ((60, "p0"), (90, "p1"), (130, "p2"), (200, "p3"), (350, "p4")):
+        if p <= e: return name
+    return "p5"
+
+
 def _fmt_action(t, with_args=False, full_args=False):
     nm = t.get("name", "")
     rs = (t.get("result_summary") or "")[:100]
@@ -191,7 +207,7 @@ def serialize(sample, version="v3", max_hist_turns=8):
     m = meta_fields(sample)
     parts = [f"[TIER] {m['user_tier']} [LANG] {m['language_pref']} [TURN] {_turn_bin(m['turn_index'])} "
              f"[CI] {m['last_ci_status']} [GIT] {'dirty' if m['git_dirty'] else 'clean'}"]
-    if version in ("v4", "v5", "v6"):
+    if version in ("v4", "v5", "v6", "v7"):
         parts.append(f"[GEN] {_gen(sample.get('id',''))} [BUDGET] {_budget_bin(m['budget'])} "
                      f"[LOC] {_loc_bin(m['loc'])} [TOPLANG] {m['top_lang']} [NOPEN] {m['n_open_files']}")
         if m["open_files"]:
@@ -210,14 +226,18 @@ def serialize(sample, version="v3", max_hist_turns=8):
             if t.get("role") == "user":
                 parts.append(f"u: {(t.get('content') or '')[:150]}")
             elif t.get("role") == "assistant_action":
-                parts.append(f"a: {_fmt_action(t, with_args=(version in ('v4', 'v6')), full_args=(version == 'v5'))}")
-    if version == "v6":
+                parts.append(f"a: {_fmt_action(t, with_args=(version in ('v4', 'v6', 'v7')), full_args=(version == 'v5'))}")
+    if version in ("v6", "v7"):
         # 좌측절단 생존 위치(끝쪽): 압축 액션 트레일 + 세션시작 마커 + 프롬프트 패턴 플래그
         seq = [t.get("name", "") for t in full_hist if t.get("role") == "assistant_action"]
         parts.append(f"[SEQ] {'>'.join(seq[-12:]) if seq else 'none'}")
         if not full_hist:
             parts.append("[NOHIST]")
         parts.append(f"[PFLAG] {_prompt_flags(prompt, m['open_files'])}")
+    if version == "v7":
+        # v7 = v6 + [PACE]: elapsed_sec(직렬화 이력상 완전 미노출)와 진행속도 bin.
+        # 실측: 탐색4class 구성이 elapsed에 단조 이동(list 22%→6%, glob 12%→25%) — meta_probe GO 근거.
+        parts.append(f"[PACE] {_elapsed_bin(m['elapsed'])} {_pace_bin(m['elapsed'], m['turn_index'])}")
     parts.append(f"[CUR] {prompt}")
     return " ".join(parts)
 
@@ -262,11 +282,59 @@ def _to_logprobs_np(logits, np):
 
 
 # ============================ 추론 ============================
+def _dequant_state_dict(model_dir):
+    """qweights.npz(int8 weight-only 양자화) → fp16 state_dict (메모리 내 복원).
+
+    1GB 제한 대응: 대형 2D 가중치는 group-G int8+fp16 scale로 zip에 저장(sim/quantize_member.py).
+    디스크에 safetensors 재작성 없이 로드 — 서버 디스크 쿼터/IO 리스크 제거.
+    """
+    import numpy as np
+    import torch
+    qp = os.path.join(model_dir, "qweights.npz")
+    if not os.path.exists(qp):
+        return None
+    z = np.load(qp)
+    out = {}
+    for k in z.files:
+        tag, _, name = k.partition("::")
+        if tag == "q":
+            q = z[k].astype(np.float32)
+            s = z[f"s::{name}"].astype(np.float32)
+            o, i = q.shape
+            if s.ndim == 2 and s.shape[1] > 1:   # group-G 양자화
+                w = (q.reshape(o, s.shape[1], -1) * s[:, :, None]).reshape(o, i)
+            else:                                 # per-row (구버전 호환)
+                w = q * s
+            out[name] = torch.from_numpy(w.astype(np.float16))
+        elif tag == "f":
+            out[name] = torch.from_numpy(z[k])
+    return out
+
+
+def _load_model_maybe_quant(model_dir):
+    """qweights.npz 존재 시 in-memory 복원 로드, 아니면 기존 from_pretrained."""
+    from transformers import AutoModelForSequenceClassification, AutoConfig
+    sd = None
+    if not os.path.exists(os.path.join(model_dir, "model.safetensors")):
+        sd = _dequant_state_dict(model_dir)
+    if sd is None:
+        return AutoModelForSequenceClassification.from_pretrained(
+            model_dir, local_files_only=True, use_safetensors=True)
+    cfg = AutoConfig.from_pretrained(model_dir, local_files_only=True)
+    model = AutoModelForSequenceClassification.from_config(cfg)
+    missing, unexpected = model.load_state_dict(sd, strict=False)
+    assert not unexpected, f"양자화 복원 잉여키: {unexpected[:5]}"
+    bad = [m for m in missing if not m.endswith((".position_ids", ".token_type_ids"))]
+    assert not bad, f"양자화 복원 누락키: {bad[:5]}"
+    return model
+
+
 def predict_logits(model_dir, samples, version="v3", max_len=192, batch_size=64,
                    device=None, max_hist_turns=8, texts=None, return_probs=False):
     """samples(list[dict]) → logits/probs(np.ndarray [N,14]). 길이정렬 배칭 + fp16(GPU).
 
     - model_dir/id_map.npy 존재 시 vocab-pruned 모델로 간주, 토큰 id 리매핑.
+    - model_dir/qweights.npz 존재 시 int8 양자화 멤버 → safetensors 선복원.
     - texts 인자를 주면 직렬화 재계산 생략(앙상블에서 공유).
     """
     import numpy as np
@@ -276,8 +344,7 @@ def predict_logits(model_dir, samples, version="v3", max_len=192, batch_size=64,
         device = "cuda" if torch.cuda.is_available() else "cpu"
     tok = AutoTokenizer.from_pretrained(model_dir, local_files_only=True)
     tok.truncation_side = "left"   # [CUR] 현재발화가 뒤쪽 → 왼쪽(오래된 history)부터 자름
-    model = AutoModelForSequenceClassification.from_pretrained(
-        model_dir, local_files_only=True, use_safetensors=True)
+    model = _load_model_maybe_quant(model_dir)
     model.to(device)
     if device == "cuda":
         model.half()      # T4 fp16 추론
@@ -298,7 +365,7 @@ def predict_logits(model_dir, samples, version="v3", max_len=192, batch_size=64,
         for b in range(0, len(order), batch_size):
             idx = order[b:b + batch_size]
             enc = tok([texts[i] for i in idx], padding=True, truncation=True,
-                      max_length=max_len, return_tensors="pt")
+                      max_length=max_len, pad_to_multiple_of=8, return_tensors="pt")
             if id_map is not None:
                 enc["input_ids"] = torch.from_numpy(
                     id_map[enc["input_ids"].numpy()]).to(enc["input_ids"].dtype)
@@ -339,8 +406,43 @@ def predict_ensemble_probs(model_root, samples, meta, device=None, return_member
                                batch_size=meta.get("batch_size", 128),
                                device=device, texts=cache[ver], return_probs=True)
         members.append(p)
-    mean = sum(members) / len(members)
+    w = meta.get("weights")
+    if w:
+        assert len(w) == len(members), "weights 길이 != 멤버수"
+        mean = sum(wi * m for wi, m in zip(w, members)) / sum(w)
+    else:
+        mean = sum(members) / len(members)
     return (mean, members) if return_members else mean
+
+
+def predict_conditional_probs(model_root, samples, meta, device=None):
+    """조건부 2-pass 앙상블 — T4 10분캡 안에서 full 앙상블 이득의 ~70% 회수 (codex R11).
+
+    m1을 전체에 추론 → top1-top2 마진 < margin_th 인 행만 m2 재추론 → 가중 혼합.
+    OOF 실측: th=0.5 → 32% 선택, +0.0023 (full +0.0033 대비 70%), ~485s.
+    """
+    import numpy as np
+    ens = meta["ensemble"]
+    assert len(ens) == 2, "conditional은 2멤버 전용"
+    w = meta.get("weights") or [0.5, 0.5]
+    th = float(meta["conditional"]["margin_th"])
+    base_ver = meta.get("version", "v4")
+    ml, bs = meta.get("max_len", 320), meta.get("batch_size", 128)
+    v1 = ens[0].get("version", base_ver)
+    v2 = ens[1].get("version", base_ver)
+    t1 = [serialize(s, v1) for s in samples]
+    p1 = predict_logits(os.path.join(model_root, ens[0]["dir"]), samples, version=v1,
+                        max_len=ml, batch_size=bs, device=device, texts=t1, return_probs=True)
+    srt = np.sort(p1, axis=1)
+    sel = np.where((srt[:, -1] - srt[:, -2]) < th)[0]
+    out = p1.copy()
+    if len(sel):
+        sub = [samples[i] for i in sel]
+        t2 = [serialize(s, v2) for s in sub]
+        p2 = predict_logits(os.path.join(model_root, ens[1]["dir"]), sub, version=v2,
+                            max_len=ml, batch_size=bs, device=device, texts=t2, return_probs=True)
+        out[sel] = (w[0] * p1[sel] + w[1] * p2) / (w[0] + w[1])
+    return out
 
 
 def predict_ngram_probs(model_dir, texts):
@@ -433,7 +535,10 @@ def predict(model_dir, samples, version="v3", max_len=192, batch_size=64,
         if not work:
             return out
 
-    if meta and "ensemble" in meta:
+    if meta and meta.get("conditional") and "ensemble" in meta:
+        probs = predict_conditional_probs(model_dir, work, meta, device=device)
+        scores = np.log(probs + 1e-9)
+    elif meta and "ensemble" in meta:
         mean_p, members = predict_ensemble_probs(model_dir, work, meta, device=device,
                                                  return_members=True)
         if meta.get("stacker"):

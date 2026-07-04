@@ -14,7 +14,10 @@ import os, sys, json, shutil, zipfile, argparse
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 ap = argparse.ArgumentParser()
 ap.add_argument("--out", required=True)
-ap.add_argument("--stacker", required=True)
+ap.add_argument("--stacker", default="")          # 비우면 mean 앙상블(스태커 없음)
+ap.add_argument("--bias", default="")             # mean 모드에서 per-class bias 적합용 teacher npz glob
+ap.add_argument("--weights", default="")          # mean 모드 멤버 가중치 "0.65,0.35" (비우면 균등)
+ap.add_argument("--margin_th", type=float, default=0)  # >0이면 조건부 2-pass(m1 마진<th만 m2 혼합)
 ap.add_argument("--member", action="append", required=True)
 ap.add_argument("--version", default="v4")
 ap.add_argument("--max_len", type=int, default=320)
@@ -46,10 +49,12 @@ for i, spec in enumerate(a.member, 1):
         entry["type"] = "ngram"
     ens.append(entry)
 
-for f in ["meta.lgb", "postproc.json", "stack_meta.json"]:
-    shutil.copy(os.path.join(ROOT, a.stacker, f), os.path.join(mdl, f))
-sm = json.load(open(os.path.join(ROOT, a.stacker, "stack_meta.json")))
-assert len(sm["members"]) == len(ens), f"스태커 멤버수 {len(sm['members'])} != 전달 멤버수 {len(ens)}"
+MEAN = not a.stacker
+if not MEAN:
+    for f in ["meta.lgb", "postproc.json", "stack_meta.json"]:
+        shutil.copy(os.path.join(ROOT, a.stacker, f), os.path.join(mdl, f))
+    sm = json.load(open(os.path.join(ROOT, a.stacker, "stack_meta.json")))
+    assert len(sm["members"]) == len(ens), f"스태커 멤버수 {len(sm['members'])} != 전달 멤버수 {len(ens)}"
 
 # ad_lib 배포본: 기각된 posmap 블록 스트립 (본선 코드검증 대비)
 src = open(os.path.join(ROOT, "common", "ad_lib.py"), encoding="utf-8").read()
@@ -59,9 +64,57 @@ if s0 >= 0 and s1 > s0:
 open(os.path.join(mdl, "ad_lib.py"), "w", encoding="utf-8").write(src)
 compile(src, "ad_lib.py", "exec")   # 스트립 후 구문 검증
 
-shutil.copytree(os.path.join(ROOT, "vendor", "lightgbm"), os.path.join(mdl, "lightgbm"))
-rm = {"version": a.version, "max_len": a.max_len, "batch_size": a.batch,
-      "ensemble": ens, "stacker": "meta.lgb", "stack_members": sm["members"]}
+need_lgb = not MEAN or any(e.get("type") == "ngram" for e in ens)
+if need_lgb:
+    shutil.copytree(os.path.join(ROOT, "vendor", "lightgbm"), os.path.join(mdl, "lightgbm"))
+rm = {"version": a.version, "max_len": a.max_len, "batch_size": a.batch, "ensemble": ens}
+W = [float(x) for x in a.weights.split(",")] if a.weights else None
+if W:
+    assert len(W) == len(ens), "weights 개수 != 멤버수"
+    rm["weights"] = W
+if a.margin_th > 0:
+    assert len(ens) == 2, "conditional은 2멤버 전용"
+    rm["conditional"] = {"margin_th": a.margin_th}
+if not MEAN:
+    rm["stacker"] = "meta.lgb"; rm["stack_members"] = sm["members"]
+# mean 모드: 멤버 prob 평균(ad_lib predict가 stacker 없으면 mean_p 사용) + per-class bias
+if MEAN and a.bias:
+    sys.path.insert(0, ROOT)
+    import numpy as np, glob
+    from common.io_utils import load_train
+    from common.cv import make_splits
+    from common.postproc import fit_bias, save as save_bias
+    samples, y, ids = load_train(); y = np.array(y)
+    groups = np.array([s["session"] for s in samples]); sp = make_splits(ids, y, groups)
+    folds = sp["folds"]; cov = np.concatenate([f[1] for f in folds])
+    # 멤버 OOF 평균으로 bias 적합 (배포와 동일: prob 평균 → log → bias)
+    oofs = []
+    for g in a.bias.split(","):
+        o = np.zeros((len(samples), 14), np.float32); cs = set()
+        for p in sorted(glob.glob(g.strip())):
+            z = np.load(p, allow_pickle=True)
+            for fdi in range(int(z["fold_lo"]), int(z["fold_hi"])):
+                if fdi in cs: continue
+                o[folds[fdi][1]] = z["oof"][folds[fdi][1]]; cs.add(fdi)
+        oofs.append(o)
+    if a.margin_th > 0:
+        # 배포와 동일한 조건부 혼합으로 bias 적합
+        assert len(oofs) == 2 and W
+        p1, p2 = oofs[0], oofs[1]
+        srt = np.sort(p1, axis=1)
+        sel = (srt[:, -1] - srt[:, -2]) < a.margin_th
+        mean_oof = p1.copy()
+        mean_oof[sel] = (W[0] * p1[sel] + W[1] * p2[sel]) / (W[0] + W[1])
+        print(f"[cond-bias] margin_th={a.margin_th} 선택률={sel[cov].mean()*100:.1f}%")
+    elif W:
+        assert len(W) == len(oofs), "weights 개수 != bias glob 개수"
+        mean_oof = sum(w * o for w, o in zip(W, oofs)) / sum(W)
+    else:
+        mean_oof = sum(oofs) / len(oofs)
+    b, _ = fit_bias(np.log(mean_oof[cov] + 1e-9), y[cov])
+    save_bias(os.path.join(mdl, "postproc.json"), b, meta={"mean_ensemble": True, "weights": W,
+                                                           "margin_th": a.margin_th or None})
+    print(f"[mean-bias] fit on {len(oofs)} member OOF {'weighted ' + str(W) if W else 'avg'}")
 json.dump(rm, open(os.path.join(mdl, "run_meta.json"), "w"))
 shutil.copy(os.path.join(ROOT, "common", "server_script.py"), os.path.join(pkg, "script.py"))
 open(os.path.join(pkg, "requirements.txt"), "w").close()
@@ -75,6 +128,9 @@ with zipfile.ZipFile(zp, "w", zipfile.ZIP_DEFLATED) as z:
             p = os.path.join(r, f)
             z.write(p, os.path.relpath(p, pkg))
 gb = os.path.getsize(zp) / 1e9
-print(f"[package] {zp}  {gb:.3f}GB  members={sm['members']}  "
-      f"stack holdout+bias={sm.get('holdout_bias')} LB예측={sm.get('lb_pred')}")
+if MEAN:
+    print(f"[package] {zp}  {gb:.3f}GB  MEAN ensemble  members={[e['dir'] for e in ens]}")
+else:
+    print(f"[package] {zp}  {gb:.3f}GB  members={sm['members']}  "
+          f"stack holdout+bias={sm.get('holdout_bias')} LB예측={sm.get('lb_pred')}")
 assert gb < 1.0, "1GB 초과!"

@@ -31,3 +31,12 @@ submit_M5,2026-07-04,B,klue+largev6(8ep)+lgbstack,v4mix,320,weighted-ce,deploy,0
 submit_M6,2026-07-04,B,klue+largev6(8ep)+ngram+lgbstack,v4v6mix,320,weighted-ce,deploy,0.7401,,0.7582,,3멤버(n-gram직교) 0.901GB; parity+시뮬 PASS; 기대LB 0.770~0.776(컷0.772돌파권); ngram lift +0.0102
 submit_M6_LB,2026-07-04,B,klue+largev6+ngram,v4v6mix,320,weighted-ce,deploy,0.7401,,0.7582,0.76639,LB실측 0.76639(23위). M5대비 +0.0017뿐(n-gram holdout+0.0083→LB+0.0017, 전이율20%). 과최적화 신호. 컷0.776까지 +0.010
 submit_largeonly,2026-07-04,B,xlm-roberta-large-v6-8ep-FULL-단독+bias,v6,320,weighted-ce,deploy,,,,0.78051,대반전! large단독이 M6(0.76639)보다 +0.0141 높음=앙상블/klue/ngram이 large를 희석·훼손. 7위. 컷돌파. 스태킹 폐기 확정
+probe_reranker,2026-07-04,eda,top2-gated-reranker,v6,320,,oof,0.7408,,,,base 0.7401 대비 +0.0006 보류. 강large와 collinear(멤버잉여 진단 확증). reranker/hist0/ngram 모두 저가치→large강화 유일경로
+submit_largeraw,2026-07-04,B,large-v6-8ep-FULL-단독-RAW(bias없음),v6,320,weighted-ce,deploy,,,,0.77474,bias 진단: raw 0.77474 vs +bias 0.78051 → bias +0.0058 이득. bias 유지 확정(6ep OOF여도 유효)
+quant_g64,2026-07-05,B,xlm-roberta-large,-,320,-,parity48,,,,,int8 group-64 양자화 661→353MB; mean|dp|=0.0005 max=0.025 argmax 47/48(경계1); 판정은 T4 holdout 델타로
+oof_pretest_str2,2026-07-05,B,ens(v6-8ep+v4mix),v6+v4,320,-,pooled-oof,0.7502,,,,가중 w_v6=0.65 +bias: v6단독 0.7468 → +0.0034. MEAN은 +0.0019. klue류 희석 아님 확인
+meta_probe,2026-07-05,eda,LGB(logit+meta),-,-,-,탐색4class,,,,,elapsed 신호 GO: fold델타 +0.0106(5/5 양수); elapsed단독≈META전체; 분포: list 22%→6% glob 12%→25% 단조
+teacher_largev7p,2026-07-05,B,xlm-roberta-large,v7,320,weighted-ce,fold0(6ep),,,,,v7=[PACE] elapsed+pace bin 스크리닝; 기준 v6 f0=0.7391 GO문턱 0.7431
+teacher_largev7p_result,2026-07-05,B,xlm-roberta-large,v7,320,weighted-ce,fold0(6ep),0.7309,,,,v7 NO-GO: v6기준 0.7391 대비 -0.0082. 메타 문 폐쇄(프로브 elapsed조건부 -0.0016과 정합)
+bench_str2q8,2026-07-05,B,ens(2-large q8),v6+v4,320,-,T4실측,,,,,holdout5810 0.78395(+0.0028 vs largeonly 0.78113) BUT 719-734s>600s캡 배포불가. T4캡=앙상블 지배 제약
+bench_lgb8,2026-07-05,B,ens(large-q8+basev6e5),v6,320,-,T4실측,,,,,500.6s PASS BUT holdout 0.77873(-0.0024 vs largeonly) 제출금지. OOF선판정+0.0015 반전 — 약멤버 희석법칙 재확인(8ep FULL엔 base도 유해)

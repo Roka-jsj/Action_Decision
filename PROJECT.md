@@ -208,6 +208,40 @@
   3. hist=0 specialist: 테스트 hist=0 비율 14% → 손익분기 subset delta **≥+0.015** (미만이면 noise에 묻힘)
 - **판정룰 개정**: 신규후보 holdout +0.003↑여도 **그 이득의 50%↑가 raw model 단계(스태커 이전)에서 보여야** 제출. ngram/stacker/bias 계열 holdout gain은 **×0.2 할인**
 
+## 5.19 강모델 앙상블 + int8 양자화 (07-05 심야)
+- **R7 실측 종결**: 탐색4class에서 large+ngram 확률평균 순증분 +0.0007 → **large가 텍스트 신호 전부 흡수**. reranker/specialist 영구 기각. codex R8 수용.
+- **codex R8 천장 진단**: 텍스트 ceiling 0.790~0.800 / 메타 정보원 진짜면 0.800~0.815 / 0.82+는 새 신호 없으면 불가. 배분 70% 함대 / 30% 메타 프로브.
+- **코드 검증으로 codex 오류 수정**: "직전 행동 미사용" 틀림(v6 [SEQ]). 진짜 미사용 = elapsed_session_sec(직렬화 전무), raw 수치(bin만), 전체 세션 행동카운트([SEQ]는 최근12 순서만). → eda/meta_probe.py (LGB, 스케일붕괴 원천차단).
+- **1GB 킬러 발견**: v6-8ep+v4-8ep 함대 앙상블 = 661×2 = 1.32GB > 1GB. R7 합의에 용량계산 누락.
+- **해결 = int8 weight-only 양자화** (sim/quantize_member.py + ad_lib._maybe_dequant):
+  - 2D 가중치(≥1e6 원소) group-64 per-group scale int8, 나머지 fp16. 661MB→**353MB**.
+  - 배포시 로드 직전 npz→safetensors(fp16) 1회 복원 → 기존 from_pretrained 경로 무변경.
+  - 패리티(48표본 CPU): mean|Δp|=0.0005, max|Δp|=0.025, argmax 47/48(뒤집힌 1건=경계표본). 최종판정은 T4 holdout 5.8k 델타로.
+- **앙상블 OOF 선판정(klue 희석 재발 방지)**: v6+v4mix 확률평균 — MEAN +0.0019, **가중 w_v6=0.65 +0.0034** (0.7468→0.7502). → ad_lib/package_ensemble에 weights 지원 추가.
+- **v4 teacher fold0 구멍**: 6ep(f0-3)+4ep(f4) 혼합 teacher_largev4mix.npz (pooled 0.7254)로 해결.
+- **v4-8ep FULL 확보** (attempt2, 8ep 55분 완주. attempt1은 ep7 pruning중 사망).
+- **산출물**: packages/submit_str2q8.zip (0.707GB, m1=v6-8ep-q8 w0.65 + m2=v4-8ep-q8 w0.35, bias=가중OOF적합, check_zip PASS).
+- **신규 게이트 도구**: make_holdout_test.py(ho::5.8k+필러 30k) + score_holdout.py + bench_t4_hold.sh (T4 타이밍+holdout 채점, 25MB 청크 업로드 — colab contents API ~30MB 한도).
+
+## 5.20 재개 스냅샷 (07-05 09:00, PC-off 예정) ⚡최우선 읽기
+**LB: 9위 0.78051 (largeonly). 0.777~0.782에 6팀 밀집, 6위 0.78183. 컷 매일 상승. D-10 (7/15 10:00 마감).**
+
+### 밤새 확정된 법칙 (전부 실측, DEBATE.md R7~R10)
+1. **새 정보원 없음**: 텍스트(ngram +0.0007)·메타(elapsed 조건부 -0.0016, v7[PACE] fold0 -0.0082) 이중 기각.
+2. **확률 앙상블 전면 폐기**: 2-large = 품질 +0.0028이나 T4 719초>600초캡 배포불가 / 약멤버(base)는 희석 -0.0024 (klue·ngram 포함 3연속 실증). **시간이 유일 제약** (양자화로 용량은 해결: int8 g64 무손상 661→353MB).
+3. **배포-holdout(5810행) ≈ LB (오차 0.0006)**: 제출 게이트 = bench_t4_hold 후 **holdout>0.7825**.
+
+### 지금 클라우드에서 돌아가는 것 (PC 무관)
+- **Kaggle 커널 `tistmesp03/ad-full2-s2-dist`** (T4x2 or P100, ~5-6h): (a) largev6s2 = seed2024+SWA3 v6-8ep FULL (soup 재료), (b) largev6dist = teacher(0.65·v6+0.35·v4) soft0.3 T=2 증류 +SWA3. 확인: `kaggle kernels status tistmesp03/ad-full2-s2-dist`, 회수: `kaggle kernels output tistmesp03/ad-full2-s2-dist -p <dir>` (KAGGLE_API_TOKEN=$(cat ~/.kaggle/access_token) 필요).
+- Colab A100: **유닛 소진 의심** (2.3h 연속 확보실패). 사용자 잔량 확인 필요.
+
+### 재개 시 실행 순서
+1. Kaggle output 회수 → member_largev6s2.zip / member_largev6dist.zip → experiments/로.
+2. `python3 sim/soup_members.py --out .../member_soup12.zip member_largefullv6.zip member_largev6s2.zip` (id_map 자동검증).
+3. 후보 3종 각각: `python3 sim/package_single.py --out submit_<x> --member <zip>::v6 --bias ".../teacher_largev6[AB]_a*.npz"` → `python3 sim/check_zip.py` → `bash sim/bench_t4_hold.sh packages/submit_<x>.zip <세션명>` (사전 1회: `python3 sim/make_holdout_test.py`).
+4. holdout>0.7825 후보만 사용자에게 제출 전달. soup·dist 둘 다 양수면 3-way soup도 시도.
+5. codex R11 답변: /tmp/codex_r11.txt (재부팅시 소실 가능 — DEBATE.md R11에 요약 기록됨).
+
 ## 6. 컴퓨트 운영 노하우 (colab CLI) ⚠️
 - `colab` CLI(google-colab-cli)로 전 과정 자동화: `new/upload/exec/download/stop`. 세션=라이브 커널, exec 간 상태 유지.
 - **세션 수명 ≈ 60분** (OAuth 토큰 만료 시 keep-alive 데몬이 갱신 못함 → VM 회수). **모든 작업을 55분 내 완결 + 즉시 다운로드** 설계.
