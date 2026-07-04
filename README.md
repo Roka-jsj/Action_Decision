@@ -169,9 +169,17 @@ python3 sim/run_offline_sim.py --model packages/submit_x/model --script packages
 
 ## 5. 현재 상태 (요약 — 최신은 PROJECT.md)
 
-- **LB 최고 0.7400** (klue-v4 + large-v6-6ep 스택). 캘리브레이션: `LB ≈ holdout(스택)+bias − [0.010, 0.018]`.
-- 최강 교사: **large-v6-6ep 5-fold 평균 0.7377** (v6 직렬화 +0.018, 6→8ep +0.010/ep).
-- 다음: FULL v6 멤버 → M5 제출 → 메가스택 증류 → 목표 **0.78+ (예선 통과), 스트레치 0.8**.
+- **LB 최고 0.78051 (7위)** = **xlm-roberta-large v6 8ep FULL 단일모델 + per-class bias**. 컷(0.776) 돌파.
+- **핵심 반전(07-04)**: 앙상블/스태킹이 강한 large를 약멤버(klue·n-gram)로 **희석해 −0.014 훼손**. large 단독이 최강 → **스태킹 폐기**. (large단독 0.78051 vs klue+large+ngram 스택 0.76639)
+- 캘리브레이션: v4멤버는 `LB≈holdout−0.015`, v6-8ep FULL 배포는 `LB≈holdout+0.01~0.015`(교사OOF가 배포모델보다 약해 하한). **holdout gain은 LB로 부분전이만** → 신규 후처리는 ×0.2 할인.
+- 다음(0.80 목표, +0.020): **large 자체 강화** — 10ep+SWA / FGM / focal·logit-adjust / 강한 large끼리만의 앙상블. 각 fold0 raw macro-F1(0.7456@8ep)로 검증(희석 없어 LB 전이).
+- 전략 검증에 **codex(GPT-5.5) 자동 반박토론** 활용: `CODEX_CHALLENGE.md` 참고.
+
+### 배포 스크립트 지도 (신규)
+- `sim/package_single.py` — 단일모델 제출(현 최강 경로). `--member <zip>::v6 [--bias <teacher_npz>]`
+- `sim/package_ensemble.py` — 다멤버+스태커(현재는 비권장, 희석 확인됨)
+- `sim/parity_check.py` — 제출 전 필수: 버전오지정/순서교체 침묵실패 검출
+- `action_decision_maximum/src/train_full_cli.py` — FULL-70k 멤버 학습(+프루닝). `sim/babysit_full.sh <TAG> <MODEL> <EP> <LR> <BATCH> <PRUNE> <VER> [GPU]`
 
 ---
 

@@ -30,3 +30,4 @@ probe_b384,2026-07-04,screen,xlm-roberta-base,v6,384,weighted-ce,fold0,0.7001,,,
 submit_M5,2026-07-04,B,klue+largev6(8ep)+lgbstack,v4mix,320,weighted-ce,deploy,0.7354,,0.7499,0.76470,LB실측! 예측0.732~0.740 대비 +0.025 대폭상회! 8ep FULL멤버+v6large 효과 예상초과. 22위
 submit_M6,2026-07-04,B,klue+largev6(8ep)+ngram+lgbstack,v4v6mix,320,weighted-ce,deploy,0.7401,,0.7582,,3멤버(n-gram직교) 0.901GB; parity+시뮬 PASS; 기대LB 0.770~0.776(컷0.772돌파권); ngram lift +0.0102
 submit_M6_LB,2026-07-04,B,klue+largev6+ngram,v4v6mix,320,weighted-ce,deploy,0.7401,,0.7582,0.76639,LB실측 0.76639(23위). M5대비 +0.0017뿐(n-gram holdout+0.0083→LB+0.0017, 전이율20%). 과최적화 신호. 컷0.776까지 +0.010
+submit_largeonly,2026-07-04,B,xlm-roberta-large-v6-8ep-FULL-단독+bias,v6,320,weighted-ce,deploy,,,,0.78051,대반전! large단독이 M6(0.76639)보다 +0.0141 높음=앙상블/klue/ngram이 large를 희석·훼손. 7위. 컷돌파. 스태킹 폐기 확정
