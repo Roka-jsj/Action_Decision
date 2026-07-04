@@ -16,14 +16,15 @@ from common.io_utils import load_train, CLASSES
 from common.cv import make_splits
 from common.metrics import macro_f1
 
-pkg = sys.argv[1]
+pkg = os.path.abspath(sys.argv[1])
 N = int(sys.argv[2]) if len(sys.argv) > 2 else 300
 mdl = os.path.join(pkg, "model")
 sys.path.insert(0, mdl)
 import importlib
 import ad_lib as dep_ad_lib
 importlib.reload(dep_ad_lib)
-assert os.path.dirname(dep_ad_lib.__file__) == mdl, "배포본 ad_lib이 로드되지 않음"
+assert os.path.realpath(os.path.dirname(dep_ad_lib.__file__)) == os.path.realpath(mdl), \
+    f"배포본 ad_lib 미로드: {dep_ad_lib.__file__}"
 
 samples, y, ids = load_train()
 y = np.array(y)

@@ -331,13 +331,36 @@ def predict_ensemble_probs(model_root, samples, meta, device=None, return_member
         ver = member.get("version", base_ver)
         if ver not in cache:
             cache[ver] = [serialize(s, ver) for s in samples]
-        p = predict_logits(mdir, samples, version=ver,
-                           max_len=member.get("max_len", meta.get("max_len", 320)),
-                           batch_size=meta.get("batch_size", 128),
-                           device=device, texts=cache[ver], return_probs=True)
+        if member.get("type") == "ngram":
+            p = predict_ngram_probs(mdir, cache[ver])
+        else:
+            p = predict_logits(mdir, samples, version=ver,
+                               max_len=member.get("max_len", meta.get("max_len", 320)),
+                               batch_size=meta.get("batch_size", 128),
+                               device=device, texts=cache[ver], return_probs=True)
         members.append(p)
     mean = sum(members) / len(members)
     return (mean, members) if return_members else mean
+
+
+def predict_ngram_probs(model_dir, texts):
+    """HashingVectorizer(무상태) + numpy 선형헤드 → softmax. sklearn pickle 없음.
+
+    model_dir: coef.npy(14×K), intercept.npy(14), meta.json(wpar/cpar 해싱 파라미터).
+    서버 sklearn으로 HashingVectorizer를 파라미터만으로 재생성(무상태) → X @ coef.T + b.
+    """
+    import numpy as np
+    from sklearn.feature_extraction.text import HashingVectorizer
+    from scipy.sparse import hstack
+    meta = json.load(open(os.path.join(model_dir, "meta.json")))
+    coef = np.load(os.path.join(model_dir, "coef.npy"))          # (14, K)
+    intercept = np.load(os.path.join(model_dir, "intercept.npy"))  # (14,)
+    hvw = HashingVectorizer(**meta["wpar"]); hvc = HashingVectorizer(**meta["cpar"])
+    X = hstack([hvw.transform(texts), hvc.transform(texts)]).tocsr()
+    z = (X @ coef.T).astype(np.float32) + intercept                # (N,14)
+    z = z - z.max(1, keepdims=True)
+    e = np.exp(z)
+    return e / e.sum(1, keepdims=True)
 
 
 # ==================== POSMAP_BLOCK_START (배포시 자동 제거) ====================

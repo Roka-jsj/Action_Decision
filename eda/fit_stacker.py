@@ -48,6 +48,7 @@ FAMILY = {
     "large8v6": ["teacher_large8v6_a*.npz"],                             # 8ep 프로브(f0)
     "kluev6": ["teacher_kluev6_g*.npz"],
     "basev6e5": ["teacher_basev6e5_g*.npz"],
+    "ngram": ["teacher_ngram.npz"],
 }
 
 

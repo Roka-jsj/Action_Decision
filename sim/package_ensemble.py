@@ -41,7 +41,10 @@ for i, spec in enumerate(a.member, 1):
         p = os.path.join(dst, junk)
         if os.path.exists(p):
             os.remove(p)
-    ens.append({"dir": f"m{i}", **({"version": mver} if mver else {})})
+    entry = {"dir": f"m{i}", **({"version": mver} if mver else {})}
+    if os.path.exists(os.path.join(dst, "coef.npy")):   # n-gram 멤버(HashingVectorizer+numpy)
+        entry["type"] = "ngram"
+    ens.append(entry)
 
 for f in ["meta.lgb", "postproc.json", "stack_meta.json"]:
     shutil.copy(os.path.join(ROOT, a.stacker, f), os.path.join(mdl, f))

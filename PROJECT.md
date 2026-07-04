@@ -174,6 +174,40 @@
 - ⚠️ 함대는 **max_len=320 확정**(384 기각). 8ep 채택이나 FULL 멤버도 8ep로.
 - ⚠️ 스태커/멤버 **직렬화 버전 반드시 명시**(largev6=v6, klue/base계열 기존=v4). parity_check.py로 검증 필수.
 
+## 5.16 M5 돌파 — 캘리브레이션 법칙 반전 (07-04 저녁) ⚡전략전환
+- **submit_M5 (klue-v4 + largev6-8ep 2멤버): LB 0.76470, 22위** — 예측 0.732~0.740을 **+0.025 대폭 상회**
+- **캘리브레이션 법칙 반전**: holdout+bias 0.7499는 **6ep 교사 OOF** 기반 → 배포는 **8ep FULL-70k 멤버**(교사보다 강함). 즉 **OOF-holdout은 실제 배포성능의 하한**. 새 관계식: FULL-8ep 배포 시 **LB ≈ holdout+bias(OOF) + 0.010~0.015** (n=1, 신중)
+- **함의**: ① 컷(0.772)까지 **+0.007**만 남음(어제 +0.03 아님) ② 3멤버 스택(holdout 0.7531)을 배포하면 같은 논리로 **~0.78+ 예상** ③ 유일 장벽 = **1GB 용량** (사용자 지적 정확: 채점 6분/10분 = 시간 여유 4분, 병목은 시간 아닌 용량)
+- **3멤버 용량 실측**: klue 204 + basev6e5 236 + largev6 661 = **1.102GB** → **110MB만 감량하면 1GB 진입**
+- **최우선 과제**: 3멤버를 1GB에 — ① large 공격적 프루닝(50k→30k토큰, ~40MB) + klue/base 추가프루닝 ② 또는 int8 양자화 ③ 또는 증류(3멤버→단일 large student 661MB + klue = 865MB)
+- 남은 시간여유 4분 → TTA(다중 max_len 평균)로 정확도 전환 가능
+- **codex(GPT-5.5 xhigh) 자동토론 도입**: VS Code 확장 번들 `bin/linux-x86_64/codex` + CODEX_HOME=/mnt/c/Users/vaseb/.codex → WSL에서 직접 호출. 계획 반전 검증용
+
+## 5.17 codex(GPT-5.5) 자동토론 2R → 전략 확정 (07-04 저녁)
+- **캘리브레이션 정밀보정**: M5 lift = +0.0148 (0.7647−0.7499), 새 식 **LB ≈ holdout+bias + 0.012~0.018** (이전 −0.010~0.018은 폐기; FULL-8ep 배포 기준). bias는 meta-OOF 적합·holdout 별도 → 오염 아님(검증)
+- **large 배포상한 재추정**: local 0.755~0.765 → LB 0.775~0.783. **0.80은 캘리브레이션만으론 불가** — 새 신호(reranking/템플릿/직교모델) 필수
+- **KD 강등**: 같은 70k OOF 증류 = 정규화(+0.002~0.008), T=1은 0/음수. 최후순위
+- **Qwen 강등**: 배포 제외(느림/fp16위험/직교성낮음), teacher 후보만
+- **확정 제출 로드맵** (codex 합의):
+  - **M6 = 3멤버 FULL stack** (large-8ep + klue + base) — 단 **base 포함시 1.10GB 초과** → base를 n-gram(~20MB)로 대체가 실질 M6. 기대 LB 0.767~0.771
+  - **M7 = large + klue + n-gram(TF-IDF LogReg)** — n-gram 직교신호면 **LB 0.772~0.778, 컷돌파 1순위**. 885MB로 1GB 적합
+  - **M8 = top-2 gated reranker** (M7 위, margin작은 샘플만 flip, OOF net +0.003 이상일때만). reranker는 stacker 다음(threshold 과적합 방지)
+- **vocab prune 50k→union**: 재프루닝만으론 무효(토큰화 같으면 출력동일), 재학습 필요 → 우선순위 낮음, 1-fold 검증 선행(8ep fold0 0.7456 대비 +0.004↑면 채택)
+- **n-gram 배포**: sklearn pickle 금지 → HashingVectorizer(무상태) 또는 LogReg coef를 numpy로 ship + 순수 python transform
+
+## 5.18 M6 플래토 + codex 4R 토론 수렴 (07-04 밤) — 전략 재정립
+- **M6 = LB 0.76639 (23위)**, M5 대비 +0.0017뿐. n-gram holdout +0.0083 → LB +0.0017 (**전이율 20%**)
+- **offset 추이**: v4멤버 LB−holdout −0.010~0.018 / v6-8ep FULL +0.0148(M5)→+0.0082(M6). holdout+bias는 신뢰할 LB 예측자 아님
+- **me⇄codex 4라운드 반박 수렴** (핵심 진단):
+  - 나: "20% 전이 = 과최적화 아님, large가 직교신호 흡수" → codex 수용·정밀화: **"6ep proxy 기준으로만 직교처럼 보인 신호가 8ep large에서 collinear"**
+  - 함의: **신규 멤버/reranker/hist=0는 6ep OOF가 아니라 8ep-large 잔차 기준으로만 검증**. large 강화보다 후순위로 강등
+  - 나: "large 변종은 스태커 없이 fold0 raw로 비교하면 깨끗" → codex 수용
+- **확정 우선순위**:
+  1. **large-only LB 앵커** (진단): submit_largeonly.zip(0.661GB, largev6-8ep+bias) — 앙상블이 실제 LB로 뭘 더하는지 분해. large단독≈M6면 멤버는 장식/흡수 / M6>large단독이면 멤버 유효 / M6<large단독이면 스태커가 해침
+  2. **large 자체 강화** (fold0 raw 0.7456 기준): 10ep+SWA(ep8/9/10) +0.003~0.006 > 10ep raw > FGM +0.001~0.003 > focal/logit-adjust > max_len↑ > vocab-union
+  3. hist=0 specialist: 테스트 hist=0 비율 14% → 손익분기 subset delta **≥+0.015** (미만이면 noise에 묻힘)
+- **판정룰 개정**: 신규후보 holdout +0.003↑여도 **그 이득의 50%↑가 raw model 단계(스태커 이전)에서 보여야** 제출. ngram/stacker/bias 계열 holdout gain은 **×0.2 할인**
+
 ## 6. 컴퓨트 운영 노하우 (colab CLI) ⚠️
 - `colab` CLI(google-colab-cli)로 전 과정 자동화: `new/upload/exec/download/stop`. 세션=라이브 커널, exec 간 상태 유지.
 - **세션 수명 ≈ 60분** (OAuth 토큰 만료 시 keep-alive 데몬이 갱신 못함 → VM 회수). **모든 작업을 55분 내 완결 + 즉시 다운로드** 설계.

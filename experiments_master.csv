@@ -27,3 +27,6 @@ submit_kl6_pm,2026-07-04,B,klue+large6+posmap,v4,320,weighted-ce,deploy,,,,,0.74
 teacher_largev6,2026-07-04,B,xlm-roberta-large,v6,320,weighted-ce,full5(6ep),0.7377,,,,v6+6ep 5fold [0.7391 0.7318 0.746 0.7386 0.733] 평균0.7377 = v4-4ep(0.704) +0.034! 최강 교사
 probe_large8v6,2026-07-04,screen,xlm-roberta-large,v6,320,weighted-ce,fold0(8ep),0.7456,,,,8ep = 6ep fold0(0.7391) +0.0065 → 8ep 채택
 probe_b384,2026-07-04,screen,xlm-roberta-base,v6,384,weighted-ce,fold0,0.7001,,,,v6@384 < @320(0.7040) -0.004(노이즈내) → max_len=320 유지 확정, 384 기각
+submit_M5,2026-07-04,B,klue+largev6(8ep)+lgbstack,v4mix,320,weighted-ce,deploy,0.7354,,0.7499,0.76470,LB실측! 예측0.732~0.740 대비 +0.025 대폭상회! 8ep FULL멤버+v6large 효과 예상초과. 22위
+submit_M6,2026-07-04,B,klue+largev6(8ep)+ngram+lgbstack,v4v6mix,320,weighted-ce,deploy,0.7401,,0.7582,,3멤버(n-gram직교) 0.901GB; parity+시뮬 PASS; 기대LB 0.770~0.776(컷0.772돌파권); ngram lift +0.0102
+submit_M6_LB,2026-07-04,B,klue+largev6+ngram,v4v6mix,320,weighted-ce,deploy,0.7401,,0.7582,0.76639,LB실측 0.76639(23위). M5대비 +0.0017뿐(n-gram holdout+0.0083→LB+0.0017, 전이율20%). 과최적화 신호. 컷0.776까지 +0.010
