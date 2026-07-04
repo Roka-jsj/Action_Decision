@@ -1,0 +1,62 @@
+# ===== 비밀정보 (절대 커밋 금지) =====
+# Kaggle/Colab 인증은 홈 디렉터리(~/.kaggle 등)에서 읽으므로 repo엔 없지만 만일 대비 차단
+**/kaggle.json
+**/access_token
+*.pem
+*.key
+.env
+.env.*
+secrets.*
+
+# ===== 대회 데이터 (Dacon에서 각자 다운로드 — 재배포 금지) =====
+open.zip
+/data/
+kaggle/ds/open.zip
+kaggle/ds/ad_common.zip
+kaggle/ds/teacher_cli.py
+
+# ===== 학습 산출물 / 모델 가중치 (대용량, 재생성 가능) =====
+*.safetensors
+*.lgb
+*.pkl
+*.pt
+*.bin
+action_decision_maximum/experiments/
+action_decision_balance/experiments/
+artifacts/
+packages/
+
+# lightgbm 벤더링 wheel — README의 pip download로 재생성
+vendor/
+
+# common/ + splits/ 번들 — 스크립트로 재생성
+ad_common.zip
+
+# npz 전체 제외하되 fold 인덱스(splits)는 재현성 위해 예외 포함
+*.npz
+!splits/splits.npz
+
+# ===== 제출 zip =====
+*submit*.zip
+SUBMIT_NOW_*.zip
+baseline_submit.zip
+
+# ===== 로그 / 임시 =====
+*.log
+/tmp/
+scratchpad/
+
+# ===== Python 캐시 =====
+__pycache__/
+*.py[cod]
+*.egg-info/
+.ipynb_checkpoints/
+.pytest_cache/
+
+# ===== WSL / Windows 아티팩트 =====
+*Zone.Identifier
+.DS_Store
+Thumbs.db
+
+# ===== 개인 핸드오프 문서 =====
+HANDOFF.md

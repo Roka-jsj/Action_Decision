@@ -1,0 +1,12 @@
+# 로컬 개발/분석/패키징용 (GPU 학습은 Colab/Kaggle에서). 버전은 Dacon 서버와 정합.
+transformers==4.46.3
+numpy==1.26.4
+pandas==2.0.3
+scikit-learn==1.3.2
+scipy>=1.10
+lightgbm==4.6.0
+sentencepiece==0.1.99
+torch>=2.0
+# Colab/Kaggle 자동화 (선택)
+google-colab-cli
+kaggle
