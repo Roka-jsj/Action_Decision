@@ -52,3 +52,7 @@ verify_largev6s3,2026-07-06,B,xlm-roberta-large,v6,320,weighted-ce,FULL(8ep+SWA3
 verify_largev6sim,2026-07-06,B,xlm-roberta-large,v6,320,weighted-ce,FULL-sim(8ep+SWA3),,,0.76275,,au제외 학습. sim-subset조차 0.78271(s1 0.79831 -0.0156) — sim-only 해악(au=정규화 신호 추정)
 rescore_simsubset,2026-07-06,eda,holdout sim/au 분해,-,-,-,rescore,,,,,s1 sim 0.79831/au 0.523. LB(0.78051)≈holdout전체(0.78113 -0.0006)이고 holdout-sim과 +0.018 괴리 → 히든테스트=train혼합(sim+au) 증거. all-sim 가설 기각 방향
 verify_largev6simraw,2026-07-06,B,xlm-roberta-large,v6,320,weighted-ce,FULL-sim(8ep raw noSWA),,,0.76851,,같은런 SWA만 제거: +0.0058 회복 — SWA 해악 확증(-0.006). 단 sim-only 자체는 s1 대비 여전히 -0.0126 → sim-only 축 사망
+gen_token_bug,2026-07-06,B,[GEN]=id-prefix 파생 발견,v4+,-,-,분석,,,,,구하네스(ho::id) au행 [GEN]sim 오서빙→au 0.523(정상 0.945·기억포함). LB 0.78051≈구하네스 = 히든id 무표식(A) or all-sim(B) or 표식혼합(C). 신하네스 holdout 0.80871(기억+정GEN 팽창 — 절대치 주의)
+dual_lambda_sweep,2026-07-06,eda,듀얼bias λ스윕(배포모델),v6,320,-,holdout5810,,,,,정GEN(clean id) 조건에선 λ무관 평평(au 이미 0.945) — 듀얼 이득은 GEN깨진 세계에서만. World C면 LB +0.002 기대 유지
+au_detector,2026-07-06,eda,LGB 콘텐츠 au감지기,-,-,-,GroupKF5,,,,,행AUC 0.974: th0.95 P0.978/R0.232, th0.99 P0.998/R0.095. 세션AUC 0.982(히든은 1행/세션이라 무용). World A시 [GEN]복원 무기
+probe_pkgs,2026-07-06,B,상수클래스 프로브 2종,-,-,-,조립,,,,,packages/probe_read_file.zip·probe_glob_pattern.zip (1KB, 스모크 PASS). read_file: allsim 3678 vs 93/7혼합 3960 (차282) — au비율 f 직접 역산

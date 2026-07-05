@@ -122,3 +122,16 @@
 - **96슬롯 재배분(codex)**: m1교체·soup·dist·sim-only·에폭변형 32 / tri_cond 재조립·th·weight 24 / weight probe 12 / 약멤버·이종교사 6 / bias·재검증 8 / 최종·예비 14. base+/v4+ 2발은 m1 교체 전 보류.
 - **내 명확화 2건 (codex 미언급)**: ① m1 교체시 cond-bias 재적합 불가(소스=6ep teacher OOF, FULL soup엔 OOF 없음) → 기존 teacher-OOF bias·th 재사용이 원칙, "재적합"은 OOF 가진 조합만. ② 검증 큐 규율: 학습 공존시 VRAM 게이트 오염(41.5GB 실측) — holdout은 공존 허용, **시간·VRAM 게이트는 GPU 유휴시에만 유효**.
 - **합의 실행순서**: s2 검증 → 가중 s1/s2 soup 5점 → m1 치환 tri_cond 오프라인 → s3(777)+sim-only 학습 → greedy 3~5 seed soup → tri_cond-teacher dist → best 기준 th/weight → LB.
+
+## R14 — 3축 사망·듀얼bias 발견·하네스 개방 (07-06 새벽)
+- **밤새 실측 (A6000 파이프라인, holdout 5810 = 전체/sim 5407/au 403)**:
+  - s1(no-SWA) 0.78113/0.79831/0.523 | s2(SWA3) 0.77600 | s3(SWA3) 0.77436 | sim-only(SWA3) 0.76275 | sim-only-raw 0.76851
+  - **soup V자 붕괴**(75:25 0.77385 / 50:50 0.76304 / 25:75 0.76957) → cross-seed weight soup 사망 (R10 기각)
+  - **SWA-lite 해악 확증**: 같은런 SWA 제거 +0.0058. 원인=6→8ep 미수렴 구간 평균. → 이중저장 패치(raw+SWA), **전면 raw 채택** (codex Q1 승인). seed 잭팟 없음(단일모델 천장 ≈0.781)
+  - **sim-only 사망**: raw로도 sim-subset -0.0093 — au 5k행이 sim 성능에도 기여
+  - **히든테스트=혼합 증거**: largeonly LB 0.78051 ≈ holdout-전체 0.78113(-0.0006), holdout-sim 0.79831과 -0.018 괴리 → all-sim 가정(5.14) 기각 방향
+- **듀얼 bias 발견 (하네스 축 1호, 사용자 지시로 개방된 공간)**: bias를 sim/au 서브셋별 적합, 추론시 id prefix로 행별 선택(무표식 폴백=글로벌·무손실). 프록시: au-subset 0.622→0.688(+0.067), **holdout 전체 +0.00208**. codex GO — λ 셔링키지(bias' = global + λ·(subset−global)) 0.5/0.75/1.0 스윕 후 최적 배포. **GO문턱: largeonly-dual +0.0010↑ 제출 / +0.0005~10 tri_cond 확인 후 / 미만 보류**. 산술: tri_cond 0.78266+0.00208=0.78474 > 5위컷 0.78429
+- codex Q3 수정: H1 LB프로빙(상수클래스 n_c 역산)은 **2~4발** — au-heavy 2발로 혼합비 검증 먼저, 문제클래스 1~2발은 조건부. (내 보완: 듀얼bias LB 1발 자체가 au-prefix 존재의 결정 실험을 겸함 — 점수 나오는 프로브)
+- codex Q4: dist 교체선 = raw 기준 s1+0.0003(≥0.78143), tri_cond 재조립은 기존 대비 +0.0005↑일 때만 LB
+- codex Q5 도달확률: 듀얼 성공시 5위 55~70% / 부분성공 30~45% / 실패 12~20%. 슬롯: 듀얼 8-12, dist 8-12, H1 2-4, th/weight 10-14, 약멤버 4-6, 예비 20+
+- **구현 완료**: postproc 3-bias 저장 + ad_lib 행별 선택 + package_single --dual/--dual_shrink + **검증셋 id 원본보존**(prefix 의존 경로 실전동일 — 하네스 수리) + eda/dual_lambda_sweep.py(배포모델 확률 1회 추론 후 즉석 λ스윕)
