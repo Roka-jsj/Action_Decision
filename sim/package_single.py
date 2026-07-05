@@ -14,6 +14,8 @@ ap = argparse.ArgumentParser()
 ap.add_argument("--out", required=True)
 ap.add_argument("--member", required=True)
 ap.add_argument("--bias", default="")   # teacher npz(oof/hold)로 bias 적합
+ap.add_argument("--dual", type=int, default=0)          # 1=듀얼 bias(sim/au 서브셋 적합, R14)
+ap.add_argument("--dual_shrink", type=float, default=1.0)  # bias_au/sim ← λ*서브셋 + (1-λ)*글로벌
 ap.add_argument("--version", default="v6")
 ap.add_argument("--max_len", type=int, default=320)
 ap.add_argument("--batch", type=int, default=128)
@@ -55,7 +57,17 @@ if a.bias:
             if f in cs: continue
             oof[folds[f][1]] = z["oof"][folds[f][1]]; cs.add(f)
     b, _ = fit_bias(np.log(oof[cov] + 1e-9), y[cov])
-    save_bias(os.path.join(mdl, "postproc.json"), b, meta={"single": True})
+    extra = None
+    if a.dual:
+        au = np.char.startswith(np.array([str(i) for i in ids]), "sess_au")
+        cov_au, cov_sim = cov[au[cov]], cov[~au[cov]]
+        b_au, _ = fit_bias(np.log(oof[cov_au] + 1e-9), y[cov_au])
+        b_sim, _ = fit_bias(np.log(oof[cov_sim] + 1e-9), y[cov_sim])
+        lam = a.dual_shrink
+        extra = {"bias_sim": lam * np.array(b_sim) + (1 - lam) * np.array(b),
+                 "bias_au": lam * np.array(b_au) + (1 - lam) * np.array(b)}
+        print(f"[bias] dual fit (au {len(cov_au)}행, sim {len(cov_sim)}행, λ={lam})")
+    save_bias(os.path.join(mdl, "postproc.json"), b, meta={"single": True}, extra_biases=extra)
     print(f"[bias] fit on {len(cs)} folds")
 
 json.dump(rm, open(os.path.join(mdl, "run_meta.json"), "w"))

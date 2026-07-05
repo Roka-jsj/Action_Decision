@@ -574,8 +574,25 @@ def predict(model_dir, samples, version="v3", max_len=192, batch_size=64,
         scores = predict_logits(model_dir, work, version, max_len, batch_size, device, max_hist_turns)
         scores = _to_logprobs_np(scores, np)
     if postproc_path and os.path.exists(postproc_path):
-        bias = np.array(load_bias(postproc_path), dtype=np.float64)
-        pred = (scores + bias).argmax(1)
+        with open(postproc_path, encoding="utf-8") as f:
+            _pp = json.load(f)
+        if _pp.get("classes") != CLASSES:
+            raise ValueError("postproc.json 클래스 순서 불일치")
+        bias = np.array(_pp["bias"], dtype=np.float64)
+        pred = None
+        if "bias_au" in _pp or "bias_sim" in _pp:
+            # 듀얼 bias(R14): id prefix로 행별 선택. prefix 체계가 확인될 때만 적용,
+            # 아니면(au 없음/무표식 id) 글로벌 bias 폴백 = 기존과 동일 동작(무손실).
+            _rid = [str(s.get("id", "")) for s in work]
+            _au = np.array([r.startswith("sess_au") for r in _rid])
+            _sim = np.array([r.startswith("sess_sim") for r in _rid])
+            if _au.any() and bool((_au | _sim).all()):
+                _b_sim = np.array(_pp.get("bias_sim", _pp["bias"]), dtype=np.float64)
+                _b_au = np.array(_pp.get("bias_au", _pp["bias"]), dtype=np.float64)
+                _brow = np.where(_au[:, None], _b_au[None, :], _b_sim[None, :])
+                pred = (scores + _brow).argmax(1)
+        if pred is None:
+            pred = (scores + bias).argmax(1)
     else:
         pred = scores.argmax(1)
     for i in range(len(work)):

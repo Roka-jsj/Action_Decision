@@ -10,9 +10,9 @@ W=/share/verify/$NAME
 rm -rf "$W"; mkdir -p "$W"
 
 # 1) 패키지 + holdout 30k 테스트셋 (train 컨테이너에서 생성 — data/, splits/ 필요)
+#    id 원본 보존(sess_* prefix) — labels.csv는 holdout 행 전용, 필러는 채점서 자동 제외
 unzip -q "$ZIP" -d "$W/pkg"
-python3 "$R/sim/make_holdout_test.py" 30000 "$W/pkg/data"
-cp "$R/data/train_labels.csv" "$W/labels.csv"
+python3 "$R/sim/make_holdout_test.py" 30000 "$W/pkg/data" "$W/labels.csv"
 [ -f "$R/sim/calib.json" ] && cp "$R/sim/calib.json" "$W/calib.json"
 
 # 2) 순수 파이썬 채점기 (오프라인 검증 컨테이너용 — sklearn 불필요)
@@ -25,8 +25,8 @@ d = os.path.dirname(os.path.abspath(__file__))
 lab = {r["id"]: r["action"] for r in csv.DictReader(open(os.path.join(d, "labels.csv"), encoding="utf-8"))}
 tp = {c: 0 for c in CLASSES}; fp = dict(tp); fn = dict(tp); n = 0
 for r in csv.DictReader(open(os.path.join(d, "pkg", "output", "submission.csv"), encoding="utf-8")):
-    tag, _, oid = r["id"].partition("::")
-    if tag != "ho" or oid not in lab: continue
+    oid = r["id"]
+    if oid not in lab: continue   # labels=holdout 전용 → 필러 자동 제외
     t, p = lab[oid], r["action"]; n += 1
     if t == p: tp[t] += 1
     else: fp[p] = fp.get(p, 0) + 1; fn[t] += 1

@@ -67,9 +67,13 @@ def apply_bias(logits, bias):
     return (to_logprobs(logits) + np.asarray(bias)).argmax(1)
 
 
-def save(path, bias, meta=None):
+def save(path, bias, meta=None, extra_biases=None):
+    """extra_biases: {"bias_sim": arr, "bias_au": arr} — 듀얼 bias(R14). 추론시 id prefix로 행별 선택."""
     obj = {"bias": list(map(float, np.asarray(bias).ravel())),
            "classes": CLASSES}
+    if extra_biases:
+        for k, v in extra_biases.items():
+            obj[k] = list(map(float, np.asarray(v).ravel()))
     if meta:
         obj["meta"] = meta
     with open(path, "w", encoding="utf-8") as f:
