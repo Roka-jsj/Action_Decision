@@ -207,8 +207,10 @@ def serialize(sample, version="v3", max_hist_turns=8):
     m = meta_fields(sample)
     parts = [f"[TIER] {m['user_tier']} [LANG] {m['language_pref']} [TURN] {_turn_bin(m['turn_index'])} "
              f"[CI] {m['last_ci_status']} [GIT] {'dirty' if m['git_dirty'] else 'clean'}"]
-    if version in ("v4", "v5", "v6", "v7"):
-        parts.append(f"[GEN] {_gen(sample.get('id',''))} [BUDGET] {_budget_bin(m['budget'])} "
+    if version in ("v4", "v5", "v6", "v7", "v6n"):
+        # v6n = v6에서 [GEN] 제거 (id-prefix 파생 토큰 — 히든 id 무표식(World A)이면 train/serve 스큐 유발, R15)
+        gen_part = "" if version == "v6n" else f"[GEN] {_gen(sample.get('id',''))} "
+        parts.append(f"{gen_part}[BUDGET] {_budget_bin(m['budget'])} "
                      f"[LOC] {_loc_bin(m['loc'])} [TOPLANG] {m['top_lang']} [NOPEN] {m['n_open_files']}")
         if m["open_files"]:
             if version == "v5":
@@ -226,8 +228,8 @@ def serialize(sample, version="v3", max_hist_turns=8):
             if t.get("role") == "user":
                 parts.append(f"u: {(t.get('content') or '')[:150]}")
             elif t.get("role") == "assistant_action":
-                parts.append(f"a: {_fmt_action(t, with_args=(version in ('v4', 'v6', 'v7')), full_args=(version == 'v5'))}")
-    if version in ("v6", "v7"):
+                parts.append(f"a: {_fmt_action(t, with_args=(version in ('v4', 'v6', 'v7', 'v6n')), full_args=(version == 'v5'))}")
+    if version in ("v6", "v7", "v6n"):
         # 좌측절단 생존 위치(끝쪽): 압축 액션 트레일 + 세션시작 마커 + 프롬프트 패턴 플래그
         seq = [t.get("name", "") for t in full_hist if t.get("role") == "assistant_action"]
         parts.append(f"[SEQ] {'>'.join(seq[-12:]) if seq else 'none'}")

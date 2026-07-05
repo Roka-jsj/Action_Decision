@@ -4,15 +4,16 @@
 # 검증 컨테이너는 오프라인·의존성 없음 전제 → 채점기는 sklearn 없이 순수 파이썬으로 생성.
 set -e
 ZIP=$(realpath "$1")
+ANON=${2:-}   # "anon"이면 id 익명화(World A 재현, R15)
 R=$(cd "$(dirname "$0")/.." && pwd)
-NAME=$(basename "$ZIP" .zip)
+NAME=$(basename "$ZIP" .zip)${ANON:+_anon}
 W=/share/verify/$NAME
 rm -rf "$W"; mkdir -p "$W"
 
 # 1) 패키지 + holdout 30k 테스트셋 (train 컨테이너에서 생성 — data/, splits/ 필요)
 #    id 원본 보존(sess_* prefix) — labels.csv는 holdout 행 전용, 필러는 채점서 자동 제외
 unzip -q "$ZIP" -d "$W/pkg"
-python3 "$R/sim/make_holdout_test.py" 30000 "$W/pkg/data" "$W/labels.csv"
+python3 "$R/sim/make_holdout_test.py" 30000 "$W/pkg/data" "$W/labels.csv" $ANON
 [ -f "$R/sim/calib.json" ] && cp "$R/sim/calib.json" "$W/calib.json"
 
 # 2) 순수 파이썬 채점기 (오프라인 검증 컨테이너용 — sklearn 불필요)

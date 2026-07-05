@@ -29,7 +29,7 @@ else
 fi
 
 # ② 패키징 (단일 멤버 + per-class bias)
-if [ "$VER" = "v6" ]; then BIAS="$E/teacher_largev6[AB]_a*.npz"; else BIAS="$E/teacher_largev4mix.npz"; fi
+case "$VER" in v6*) BIAS="$E/teacher_largev6[AB]_a*.npz";; *) BIAS="$E/teacher_largev4mix.npz";; esac
 python3 $R/sim/package_single.py --out submit_$TAG --member $E/member_$TAG.zip::$VER --bias "$BIAS"
 python3 $R/sim/check_zip.py $R/packages/submit_$TAG.zip
 
