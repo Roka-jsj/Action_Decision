@@ -58,3 +58,7 @@ au_detector,2026-07-06,eda,LGB 콘텐츠 au감지기,-,-,-,GroupKF5,,,,,행AUC 0
 probe_pkgs,2026-07-06,B,상수클래스 프로브 2종,-,-,-,조립,,,,,packages/probe_read_file.zip·probe_glob_pattern.zip (1KB, 스모크 PASS). read_file: allsim 3678 vs 93/7혼합 3960 (차282) — au비율 f 직접 역산
 verify_largev6dist3,2026-07-06,B,large 3way증류(hard.7/soft.3/T2)+SWA3,v6,320,kd,FULL(8ep),,,0.79750,,신하네스. 앵커(s1 0.80873) -0.0112 — 단 SWA변종. ⚠판정함정: 증류=soft타깃이라 암기팽창 옅음 → holdout 비교가 dist에 구조적 불리(정직성능 동일해도 낮게 측정)
 verify_largev6dist3raw,2026-07-06,B,large 3way증류 raw(noSWA),v6,320,kd,FULL(8ep),,,0.80163,,신하네스 앵커 -0.0071 문턱미달(기각권). 클린 서버환산 259s. 암기핸디캡 캐비앳 있으나 갭 큼. World A면 no-GEN 재학습이 우선이라 dist는 보류
+verify_largeonly_anon,2026-07-06,B,largeonly@익명id 하네스,v6,320,-,holdout5810,,,0.78113,,구하네스와 완전일치 — anon모드=히든서빙 재현 검증. World-A 예측기: anon점수-0.0006≈LB. v6n 판정자
+verify_largev6n,2026-07-06,B,large v6n(no-GEN)+SWA3,v6n,320,weighted-ce,FULL(8ep),,,0.79461,,클린하네스(=anon, id무관). s1 0.80873 대비 -0.014이나 au암기키 상실 교란 — 정직비용은 fold0 프로브로
+verify_largev6nraw,2026-07-06,B,large v6n raw(noSWA no-GEN),v6n,320,weighted-ce,FULL(8ep),,,0.80224,,분해: sim 0.80155(s1 +0.0032 승!)/au 0.74314(부분암기). 서버환산 354s PASS. World A/B 우세·C 동급 후보 — fold0 정직치 대기
+dist_final,2026-07-06,B,dist3raw 분해,v6,320,kd,rescore,,,,,sim 0.79066(s1 -0.008 열세)/au 0.94216(암기) — dist 전체점수는 au암기 착시. 기각 확정
