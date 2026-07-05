@@ -223,24 +223,29 @@
 - **산출물**: packages/submit_str2q8.zip (0.707GB, m1=v6-8ep-q8 w0.65 + m2=v4-8ep-q8 w0.35, bias=가중OOF적합, check_zip PASS).
 - **신규 게이트 도구**: make_holdout_test.py(ho::5.8k+필러 30k) + score_holdout.py + bench_t4_hold.sh (T4 타이밍+holdout 채점, 25MB 청크 업로드 — colab contents API ~30MB 한도).
 
-## 5.20 재개 스냅샷 (07-05 09:00, PC-off 예정) ⚡최우선 읽기
-**LB: 9위 0.78051 (largeonly). 0.777~0.782에 6팀 밀집, 6위 0.78183. 컷 매일 상승. D-10 (7/15 10:00 마감).**
+## 5.20 재개 스냅샷 (07-05 11:00, PC-off 12:30) ⚡최우선 읽기
+**LB: lgb8 = 0.78226 (6위권 탈환). str2q8 0.78189 / largeonly 0.78051도 은행. 0.777~0.783 밀집, 컷 상승중. D-10.**
 
-### 밤새 확정된 법칙 (전부 실측, DEBATE.md R7~R10)
-1. **새 정보원 없음**: 텍스트(ngram +0.0007)·메타(elapsed 조건부 -0.0016, v7[PACE] fold0 -0.0082) 이중 기각.
-2. **확률 앙상블 전면 폐기**: 2-large = 품질 +0.0028이나 T4 719초>600초캡 배포불가 / 약멤버(base)는 희석 -0.0024 (klue·ngram 포함 3연속 실증). **시간이 유일 제약** (양자화로 용량은 해결: int8 g64 무손상 661→353MB).
-3. **배포-holdout(5810행) ≈ LB (오차 0.0006)**: 제출 게이트 = bench_t4_hold 후 **holdout>0.7825**.
+### 오전 대반전 (R11~R12, DEBATE.md)
+1. **holdout 게이트 누수편향 판명**: lgb8 holdout -0.0024 "기각"이 실제 LB **+0.0017 (0.78226 최고)**. FULL멤버가 holdout을 학습했으므로 large비중↑=암기 과대평가, base 섞이면 과소평가. → **교차-계열 비교는 LB만. holdout은 동일계열/파이프라인 검증용.**
+2. **서버가 Colab T4보다 빠름**: 2-large가 서버 8분07초 통과(Colab 측정 719초는 과대). **서버 시간예산(채점시간 역산): large +230초, base +117초, 기본 ~4분17초.** full 3-way(large2+base)는 ~10분04초로 캡 초과 위험.
+3. **조건부 앙상블 구현·검증**(ad_lib.predict_conditional_probs): full 멤버 혼합→저마진 행만 조건부 멤버 재추론. OOF: 3-way full 0.7505(w 0.6/0.15/0.25), cond th=0.5(35% 선택) 0.7501, 서버추정 ~7분40초.
+4. batch256는 서버에서 오히려 느림(str2q8b 8분56초) → **batch128 고정.**
 
-### 지금 클라우드에서 돌아가는 것 (PC 무관)
-- **Kaggle 커널 `tistmesp03/ad-full2-s2-dist`** (T4x2 or P100, ~5-6h): (a) largev6s2 = seed2024+SWA3 v6-8ep FULL (soup 재료), (b) largev6dist = teacher(0.65·v6+0.35·v4) soft0.3 T=2 증류 +SWA3. 확인: `kaggle kernels status tistmesp03/ad-full2-s2-dist`, 회수: `kaggle kernels output tistmesp03/ad-full2-s2-dist -p <dir>` (KAGGLE_API_TOKEN=$(cat ~/.kaggle/access_token) 필요).
-- Colab A100: **유닛 소진 의심** (2.3h 연속 확보실패). 사용자 잔량 확인 필요.
+### 즉시 제출 후보 (조립완료)
+- **packages/submit_tri_cond.zip (0.943GB)**: m1=large-v6-8ep-q8(w0.6) + m2=base-v6-e5(w0.15) 전체 + m3=large-v4-8ep-q8(w0.25) 저마진 35%만. cond-bias 동일규칙 적합. CPU 스모크 검증 (완료 확인 후 제출). 기대 LB ~0.783±0.001, 서버 ~7분40초.
+
+### 클라우드에서 돌아가는 것 (PC 무관)
+- **Kaggle 커널 `tistmesp03/ad-full2-s2-dist`** (~14시경 완료 예상): (a) largev6s2 = seed2024+SWA3 v6-8ep FULL (soup 재료), (b) largev6dist = teacher(0.65·v6+0.35·v4) soft0.3 T=2 증류+SWA3. 상태: `KAGGLE_API_TOKEN=$(cat ~/.kaggle/access_token) kaggle kernels status tistmesp03/ad-full2-s2-dist`, 회수: `kaggle kernels output tistmesp03/ad-full2-s2-dist -p <dir>`.
+- Colab: A100·T4 모두 유닛 소진(확보 실패 지속). 사용자 잔량 확인/충전 필요.
 
 ### 재개 시 실행 순서
-1. Kaggle output 회수 → member_largev6s2.zip / member_largev6dist.zip → experiments/로.
-2. `python3 sim/soup_members.py --out .../member_soup12.zip member_largefullv6.zip member_largev6s2.zip` (id_map 자동검증).
-3. 후보 3종 각각: `python3 sim/package_single.py --out submit_<x> --member <zip>::v6 --bias ".../teacher_largev6[AB]_a*.npz"` → `python3 sim/check_zip.py` → `bash sim/bench_t4_hold.sh packages/submit_<x>.zip <세션명>` (사전 1회: `python3 sim/make_holdout_test.py`).
-4. holdout>0.7825 후보만 사용자에게 제출 전달. soup·dist 둘 다 양수면 3-way soup도 시도.
-5. codex R11 답변: /tmp/codex_r11.txt (재부팅시 소실 가능 — DEBATE.md R11에 요약 기록됨).
+1. (안 했으면) submit_tri_cond.zip 제출 → 채점시간·점수로 조건부 모드 서버 검증.
+2. Kaggle output 회수 → member_largev6s2.zip / member_largev6dist.zip → experiments/.
+3. soup: `python3 sim/soup_members.py --out .../member_soup12.zip .../member_largefullv6.zip .../member_largev6s2.zip` → 양자화 → package_single(bias=teacher_largev6[AB]) → **LB로 직접 판정**(holdout은 계열편향, 동일계열 soup는 참고만). dist도 동일.
+4. 승자 조합으로 tri_cond의 m1 교체(soup가 v6단독을 이기면) → 재조립 → 제출.
+5. 백로그: pairwise post-hoc(list P=0.384 저마진 스위치, crossfit), sim-only FULL, 3-way soup.
+6. 제출 캘린더: ~7/13 실험, 7/14 저녁 final 동결, 7/15 오전 제출 회피. 하루 10회 슬롯 아끼지 말 것(저위험 후보 즉시 은행).
 
 ## 6. 컴퓨트 운영 노하우 (colab CLI) ⚠️
 - `colab` CLI(google-colab-cli)로 전 과정 자동화: `new/upload/exec/download/stop`. 세션=라이브 커널, exec 간 상태 유지.

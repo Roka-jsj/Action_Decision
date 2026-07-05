@@ -4,8 +4,8 @@
 평가지표 = **Macro-F1**. 제출은 **코드 제출**(zip: `model/` + `script.py` + `requirements.txt`)이고,
 Dacon 서버(T4 16GB, 오프라인, ≤1GB, 설치·추론 각 ≤10분)가 30k 히든 테스트로 채점한다.
 
-> 상세 전략·실험 로그·의사결정 근거는 전부 [`PROJECT.md`](PROJECT.md) 에 있다. **작업 전 반드시 정독.**
-> 실험 결과 원장은 [`experiments_master.csv`](experiments_master.csv).
+> **현재: LB 0.78226 (6위권, 07-05).** 전체 여정·법칙·기각가설 정리 = [`REPORT.md`](REPORT.md) ← 종합 보고서.
+> 운영 상세·재개 체크리스트 = [`PROJECT.md`](PROJECT.md) / GPT-5.5 상호비판 토론 로그 = [`DEBATE.md`](DEBATE.md) / 실험 원장 = [`experiments_master.csv`](experiments_master.csv).
 
 ---
 

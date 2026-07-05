@@ -40,3 +40,5 @@ teacher_largev7p,2026-07-05,B,xlm-roberta-large,v7,320,weighted-ce,fold0(6ep),,,
 teacher_largev7p_result,2026-07-05,B,xlm-roberta-large,v7,320,weighted-ce,fold0(6ep),0.7309,,,,v7 NO-GO: v6기준 0.7391 대비 -0.0082. 메타 문 폐쇄(프로브 elapsed조건부 -0.0016과 정합)
 bench_str2q8,2026-07-05,B,ens(2-large q8),v6+v4,320,-,T4실측,,,,,holdout5810 0.78395(+0.0028 vs largeonly 0.78113) BUT 719-734s>600s캡 배포불가. T4캡=앙상블 지배 제약
 bench_lgb8,2026-07-05,B,ens(large-q8+basev6e5),v6,320,-,T4실측,,,,,500.6s PASS BUT holdout 0.77873(-0.0024 vs largeonly) 제출금지. OOF선판정+0.0015 반전 — 약멤버 희석법칙 재확인(8ep FULL엔 base도 유해)
+lb_recal,2026-07-05,B,-,-,-,-,LB실측,,,0.78226,,lgb8 LB 0.78226(최고)! holdout게이트 누수편향 판명(large암기 과대/base 과소). str2q8 0.78189(8분07 통과—Colab측정 과대). 서버예산: large+230s base+117s
+submit_tri_cond,2026-07-05,B,ens(large-v6q8+base+large-v4q8 cond),v6+v4,320,-,OOF,0.7501,,,,조건부 3-way th=0.5 w(0.6/0.15/0.25) 35%선택. full-3way OOF 0.7505. 서버추정 7분40초. 0.943GB

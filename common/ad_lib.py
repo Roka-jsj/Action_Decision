@@ -416,32 +416,51 @@ def predict_ensemble_probs(model_root, samples, meta, device=None, return_member
 
 
 def predict_conditional_probs(model_root, samples, meta, device=None):
-    """조건부 2-pass 앙상블 — T4 10분캡 안에서 full 앙상블 이득의 ~70% 회수 (codex R11).
+    """조건부 앙상블 — 10분캡 안에서 full 앙상블 이득 대부분 회수 (codex R11 → R12 일반화).
 
-    m1을 전체에 추론 → top1-top2 마진 < margin_th 인 행만 m2 재추론 → 가중 혼합.
-    OOF 실측: th=0.5 → 32% 선택, +0.0023 (full +0.0033 대비 70%), ~485s.
+    full 멤버들(cond_members 제외)을 전체에 추론·가중혼합 → top1-top2 마진 < margin_th 인
+    행만 cond 멤버 추가 추론·재혼합. LB 실측(07-05): 서버 시간예산 large+230s/base+117s.
     """
     import numpy as np
     ens = meta["ensemble"]
-    assert len(ens) == 2, "conditional은 2멤버 전용"
-    w = meta.get("weights") or [0.5, 0.5]
-    th = float(meta["conditional"]["margin_th"])
+    w = meta.get("weights") or [1.0] * len(ens)
+    cond = meta["conditional"]
+    th = float(cond["margin_th"])
+    cond_idx = set(cond.get("cond_members", [len(ens) - 1]))   # 기본: 마지막 멤버만 조건부
     base_ver = meta.get("version", "v4")
     ml, bs = meta.get("max_len", 320), meta.get("batch_size", 128)
-    v1 = ens[0].get("version", base_ver)
-    v2 = ens[1].get("version", base_ver)
-    t1 = [serialize(s, v1) for s in samples]
-    p1 = predict_logits(os.path.join(model_root, ens[0]["dir"]), samples, version=v1,
-                        max_len=ml, batch_size=bs, device=device, texts=t1, return_probs=True)
-    srt = np.sort(p1, axis=1)
+
+    def run(mi, subset, texts_cache):
+        m = ens[mi]
+        ver = m.get("version", base_ver)
+        if ver not in texts_cache:
+            texts_cache[ver] = {}
+        tc = texts_cache[ver]
+        tx = []
+        for s in subset:
+            k = id(s)
+            if k not in tc:
+                tc[k] = serialize(s, ver)
+            tx.append(tc[k])
+        return predict_logits(os.path.join(model_root, m["dir"]), subset, version=ver,
+                              max_len=ml, batch_size=bs, device=device, texts=tx,
+                              return_probs=True)
+
+    tcache = {}
+    full_idx = [i for i in range(len(ens)) if i not in cond_idx]
+    wf = sum(w[i] for i in full_idx)
+    p_full = sum(w[i] * run(i, samples, tcache) for i in full_idx) / wf
+    srt = np.sort(p_full, axis=1)
     sel = np.where((srt[:, -1] - srt[:, -2]) < th)[0]
-    out = p1.copy()
+    out = p_full.copy()
     if len(sel):
         sub = [samples[i] for i in sel]
-        t2 = [serialize(s, v2) for s in sub]
-        p2 = predict_logits(os.path.join(model_root, ens[1]["dir"]), sub, version=v2,
-                            max_len=ml, batch_size=bs, device=device, texts=t2, return_probs=True)
-        out[sel] = (w[0] * p1[sel] + w[1] * p2) / (w[0] + w[1])
+        acc = wf * p_full[sel]
+        wt = wf
+        for mi in sorted(cond_idx):
+            acc = acc + w[mi] * run(mi, sub, tcache)
+            wt += w[mi]
+        out[sel] = acc / wt
     return out
 
 

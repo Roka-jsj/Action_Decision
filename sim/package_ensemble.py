@@ -73,8 +73,8 @@ if W:
     assert len(W) == len(ens), "weights 개수 != 멤버수"
     rm["weights"] = W
 if a.margin_th > 0:
-    assert len(ens) == 2, "conditional은 2멤버 전용"
-    rm["conditional"] = {"margin_th": a.margin_th}
+    # 마지막 멤버만 조건부(저마진 행 재추론), 앞 멤버들은 전체 추론
+    rm["conditional"] = {"margin_th": a.margin_th, "cond_members": [len(ens) - 1]}
 if not MEAN:
     rm["stacker"] = "meta.lgb"; rm["stack_members"] = sm["members"]
 # mean 모드: 멤버 prob 평균(ad_lib predict가 stacker 없으면 mean_p 사용) + per-class bias
@@ -98,13 +98,14 @@ if MEAN and a.bias:
                 o[folds[fdi][1]] = z["oof"][folds[fdi][1]]; cs.add(fdi)
         oofs.append(o)
     if a.margin_th > 0:
-        # 배포와 동일한 조건부 혼합으로 bias 적합
-        assert len(oofs) == 2 and W
-        p1, p2 = oofs[0], oofs[1]
-        srt = np.sort(p1, axis=1)
+        # 배포와 동일한 조건부 혼합으로 bias 적합 (마지막 멤버 = 조건부)
+        assert W and len(W) == len(oofs)
+        wf = sum(W[:-1])
+        p_full = sum(w * o for w, o in zip(W[:-1], oofs[:-1])) / wf
+        srt = np.sort(p_full, axis=1)
         sel = (srt[:, -1] - srt[:, -2]) < a.margin_th
-        mean_oof = p1.copy()
-        mean_oof[sel] = (W[0] * p1[sel] + W[1] * p2[sel]) / (W[0] + W[1])
+        mean_oof = p_full.copy()
+        mean_oof[sel] = (wf * p_full[sel] + W[-1] * oofs[-1][sel]) / (wf + W[-1])
         print(f"[cond-bias] margin_th={a.margin_th} 선택률={sel[cov].mean()*100:.1f}%")
     elif W:
         assert len(W) == len(oofs), "weights 개수 != bias glob 개수"
