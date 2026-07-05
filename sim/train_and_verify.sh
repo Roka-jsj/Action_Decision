@@ -11,7 +11,7 @@
 set -e
 TAG=$1; SEED=$2; EP=${3:-8}; VER=${4:-v6}; TC=${5:-mun-jtest}
 [ -n "$TAG" ] && [ -n "$SEED" ] || { echo "usage: $0 <TAG> <SEED> [EPOCHS] [VERSION] [TEST_CT]"; exit 1; }
-R=/workspace
+R=$(cd "$(dirname "$0")/.." && pwd)   # 저장소 루트 자동 인식 (클론 위치 무관)
 E=$R/action_decision_maximum/experiments
 mkdir -p $R/work $E
 
