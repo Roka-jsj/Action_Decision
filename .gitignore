@@ -60,3 +60,7 @@ Thumbs.db
 
 # ===== 개인 핸드오프 문서 =====
 HANDOFF.md
+# 서버 부트스트랩용 대용량 아티팩트 (Kaggle 데이터셋으로만 전송)
+kaggle/ds/*.zip
+kaggle/ds/*.npz
+member_*.zip
