@@ -43,3 +43,4 @@ bench_lgb8,2026-07-05,B,ens(large-q8+basev6e5),v6,320,-,T4실측,,,,,500.6s PASS
 lb_recal,2026-07-05,B,-,-,-,-,LB실측,,,0.78226,,lgb8 LB 0.78226(최고)! holdout게이트 누수편향 판명(large암기 과대/base 과소). str2q8 0.78189(8분07 통과—Colab측정 과대). 서버예산: large+230s base+117s
 submit_tri_cond,2026-07-05,B,ens(large-v6q8+base+large-v4q8 cond),v6+v4,320,-,OOF,0.7501,,,,조건부 3-way th=0.5 w(0.6/0.15/0.25) 35%선택. full-3way OOF 0.7505. 서버추정 7분40초. 0.943GB
 lb_tri_cond,2026-07-05,B,ens(tri_cond),v6+v4,320,-,LB실측,,,0.78266,,신최고! 7분07초. 예측 0.7827~0.7831 적중. 조건부 앙상블 서버검증 완료. lgb8 +0.0004
+lb_cond2,2026-07-05,B,ens(2-large cond th0.5),v6+v4,320,-,LB실측,,,0.78162,,5분44초. full 2-large(0.78189) 이득의 79% 회수/32% 재추론 — 조건부 보존율 검증. tri_cond(0.78266)에 열위로 은퇴
