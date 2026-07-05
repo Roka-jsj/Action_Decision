@@ -224,7 +224,7 @@
 - **신규 게이트 도구**: make_holdout_test.py(ho::5.8k+필러 30k) + score_holdout.py + bench_t4_hold.sh (T4 타이밍+holdout 채점, 25MB 청크 업로드 — colab contents API ~30MB 한도).
 
 ## 5.20 재개 스냅샷 (07-05 11:00, PC-off 12:30) ⚡최우선 읽기
-**LB: lgb8 = 0.78226 (6위권 탈환). str2q8 0.78189 / largeonly 0.78051도 은행. 0.777~0.783 밀집, 컷 상승중. D-10.**
+**LB: tri_cond = 0.78266 (신최고, 7분07초). lgb8 0.78226, str2q8 0.78189도 은행. 5위 0.78429 추격. D-10.**
 
 ### 오전 대반전 (R11~R12, DEBATE.md)
 1. **holdout 게이트 누수편향 판명**: lgb8 holdout -0.0024 "기각"이 실제 LB **+0.0017 (0.78226 최고)**. FULL멤버가 holdout을 학습했으므로 large비중↑=암기 과대평가, base 섞이면 과소평가. → **교차-계열 비교는 LB만. holdout은 동일계열/파이프라인 검증용.**
