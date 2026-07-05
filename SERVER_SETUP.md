@@ -26,7 +26,9 @@ docker volume create mun-jshare
 
 docker run -d --name mun-jtrain \
   --gpus '"device=0"' --ipc=host --shm-size=32g \
-  -v mun-jshare:/share -w /workspace \
+  -v mun-jshare:/share \
+  -v /var/run/docker.sock:/var/run/docker.sock \
+  -w /workspace \
   action-clf:eval sleep infinity
 
 docker run -d --name mun-jtest \
@@ -42,7 +44,9 @@ docker volume create mun-share
 
 docker run -d --name mun-train \
   --gpus '"device=1"' --ipc=host --shm-size=32g \
-  -v mun-share:/share -w /workspace \
+  -v mun-share:/share \
+  -v /var/run/docker.sock:/var/run/docker.sock \
+  -w /workspace \
   action-clf:eval sleep infinity
 
 docker run -d --name mun-test \
@@ -53,6 +57,7 @@ docker run -d --name mun-test \
 ```
 
 - `-d + sleep infinity`: 원격(Chrome원격/SSH) 끊겨도 컨테이너 생존. 진입: `docker exec -it mun-jtrain bash`
+- **학습 컨테이너에만 docker 소켓**: 안에서 `docker exec mun-jtest ...`로 검증을 직접 발사(전자동 고리). 검증 컨테이너엔 소켓 금지(평가서버 재현 격리 유지). 소켓=데몬 전체 제어권이므로 조원 컨테이너도 보임(팀 합의 전제).
 - 검증 컨테이너는 **상주하되 손대지 않는다** — 실행은 §4처럼 호스트에서 `docker exec` 한 줄.
 - GPU 공유 주의: 내 train/test가 같은 GPU0을 쓰므로, **시간 측정용 검증은 학습이 안 도는 틈에** 실행(동시 실행 시 시간 오염; VRAM은 48GB라 공존 가능).
 
@@ -77,7 +82,8 @@ chmod 600 ~/.kaggle/kaggle.json
 # 데이터·멤버 번들 + 부트스트랩
 cd /workspace
 kaggle datasets download tistmesp03/ad236694-train-bundle -p ./bundle --unzip
-apt-get update -qq && apt-get install -y -qq zip unzip
+apt-get update -qq && apt-get install -y -qq zip unzip docker.io
+docker ps   # 소켓 동작 확인 (컨테이너 목록 보이면 OK)
 bash sim/server_bootstrap.sh ./bundle   # 끝에 "bootstrap OK: 70000 samples" 확인
 ```
 
@@ -109,17 +115,15 @@ bash sim/prep_verify.sh packages/submit_X.zip
 ```
 → `/share/verify/submit_X/`에 자가완결 검증셋 생성(패키지+holdout 30k+순수파이썬 채점기+run.sh — 오프라인 컨테이너에 의존성 불필요).
 
-**② 실행 — 방법 A (수동 한 줄, 호스트 터미널)**:
+**② 실행 — 학습 컨테이너 안에서 직접** (소켓 덕분에 한 줄 체인, 전자동):
 ```bash
-docker exec -it mun-jtest bash /share/verify/submit_X/run.sh
+bash sim/prep_verify.sh packages/submit_X.zip \
+  && docker exec mun-jtest bash /share/verify/submit_X/run.sh
 ```
-**② 실행 — 방법 B (완전 자동: 검증 데몬, 호스트 tmux에 1회 켜두기)**:
-```bash
-while true; do docker exec mun-jtest sh -c 'for f in /share/verify/*/run.sh; do d=$(dirname $f); [ -f "$d/.done" ] || { bash "$f" > "$d/result.txt" 2>&1; touch "$d/.done"; }; done' 2>/dev/null; sleep 30; done
-```
-→ prep_verify로 새 검증셋이 생기면 30초 내 자동 실행, 결과는 `/share/verify/<이름>/result.txt`로 회신 —
-**학습 컨테이너의 Claude Code가 이 파일을 읽어 게이트 판정까지 이어감** (학습→패키징→검증→판정 전자동 고리 완성).
+→ 컨테이너 안 Claude Code가 학습→패키징→검증→게이트판정을 손 없이 이어감.
 출력: A6000 실측시간 / 피크 VRAM / 행수 / holdout macro-F1 / **환산 서버시간 게이트(≤540s)** / **VRAM 게이트(≤14GB)**.
+(참고 — 소켓 없이 쓸 때의 대안: 호스트 tmux에 검증 데몬
+`while true; do docker exec mun-jtest sh -c 'for f in /share/verify/*/run.sh; do d=$(dirname $f); [ -f "$d/.done" ] || { bash "$f" > "$d/result.txt" 2>&1; touch "$d/.done"; }; done' 2>/dev/null; sleep 30; done`)
 
 **캘리브레이션 (최초 1회)** — A6000은 T4보다 3~4배 빨라 절대시간이 무의미. 서버 실측 앵커로 비율 산출:
 ```bash
