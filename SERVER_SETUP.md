@@ -74,14 +74,17 @@ cd /workspace
 git clone https://github.com/Roka-jsj/Action_Decision.git .
 git config user.name "Roka-jsj" && git config user.email "vasebull@gmail.com"
 apt-get update -qq && apt-get install -y -qq zip unzip docker.io
-docker ps        # 소켓 확인 (컨테이너 목록 보이면 OK)
+echo 'export DOCKER_API_VERSION=1.43' >> ~/.bashrc && export DOCKER_API_VERSION=1.43   # 신형 CLI ↔ 구형 호스트데몬 정합
+docker ps        # 소켓 확인 (컨테이너 목록 보이면 OK; "client version too new" 뜨면 위 줄 재확인)
 pip install -q kaggle
 mkdir -p ~/.kaggle
 ```
-**블록 2 (kaggle 인증 — username/key만 바꿔서 한 줄)**:
+**블록 2 (kaggle 인증)** — ⚠️ `<...>`는 자리표시자: kaggle.com→Settings→API→Create New Token으로 받은 **실제 username/key로 교체**해서 실행:
 ```bash
-echo '{"username":"<KAGGLE_USERNAME>","key":"<KAGGLE_KEY>"}' > ~/.kaggle/kaggle.json && chmod 600 ~/.kaggle/kaggle.json
+echo '{"username":"실제username","key":"실제key"}' > ~/.kaggle/kaggle.json && chmod 600 ~/.kaggle/kaggle.json
+python3 -c "import json;json.load(open('/root/.kaggle/kaggle.json'));print('json OK')"
 ```
+(pip가 DNS 오류나면: `echo 'nameserver 8.8.8.8' >> /etc/resolv.conf` 후 재시도)
 **블록 3 (데이터·멤버 반입 + 부트스트랩)**:
 ```bash
 cd /workspace
