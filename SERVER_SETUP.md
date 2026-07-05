@@ -85,12 +85,15 @@ kaggle.com→Settings→API→Create New Token으로 받은 kaggle.json에서 **
 read -p "Kaggle key 붙여넣기: " K && echo "{\"username\":\"tistmesp03\",\"key\":\"$K\"}" > ~/.kaggle/kaggle.json && chmod 600 ~/.kaggle/kaggle.json && python3 -c "import json;d=json.load(open('/root/.kaggle/kaggle.json'));assert d['key'].isascii() and len(d['key'])>20, 'key 형식 이상';print('json OK:', d['username'])"
 ```
 `json OK: tistmesp03` 확인. (pip DNS 오류 시: `echo 'nameserver 8.8.8.8' >> /etc/resolv.conf` 후 재시도)
-**블록 3 (데이터·멤버 반입 + 부트스트랩)**:
+**블록 3 (데이터·멤버 반입 + 부트스트랩)** — 공개 데이터셋이라 인증 불필요(직링크):
 ```bash
 cd /workspace
-kaggle datasets download tistmesp03/ad236694-train-bundle -p /workspace/bundle --unzip
+curl -L -o /workspace/bundle.zip "https://www.kaggle.com/api/v1/datasets/download/tistmesp03/ad236694-train-bundle"
+unzip -q /workspace/bundle.zip -d /workspace/bundle && rm /workspace/bundle.zip
 bash /workspace/sim/server_bootstrap.sh /workspace/bundle    # "bootstrap OK: 70000 samples" 확인
 ```
+(수 KB짜리가 받아지면 비공개 상태 → 블록 2의 kaggle 인증 후 `kaggle datasets download tistmesp03/ad236694-train-bundle -p /workspace/bundle --unzip`)
+블록 2(kaggle key)는 **멤버 백업 업로드(§5) 시점에만** 필요 — 셋업 단계에선 건너뛰어도 됨.
 
 ### Claude Code / codex (VS Code 확장)
 로컬 VS Code: **Remote-SSH** 접속 → Remote Explorer → **Attach to Running Container → mun-jtrain** → 폴더 `/workspace` 열기 → 확장(Claude Code, Codex) 설치·로그인. 이후 전략·실험 지휘는 이 Claude가 담당.
