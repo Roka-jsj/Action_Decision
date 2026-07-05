@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(docker *)",
+      "Bash(bash sim/*)",
+      "Bash(python3 sim/*)",
+      "Bash(python3 eda/*)"
+    ]
+  },
+  "env": {
+    "DOCKER_API_VERSION": "1.43"
+  }
+}

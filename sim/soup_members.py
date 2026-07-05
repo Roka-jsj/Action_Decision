@@ -13,9 +13,16 @@ import numpy as np
 
 ap = argparse.ArgumentParser()
 ap.add_argument("--out", required=True)
+ap.add_argument("--w", default="", help="쉼표구분 가중치(합1로 정규화). 생략시 균등평균")
 ap.add_argument("members", nargs="+")
 a = ap.parse_args()
 assert len(a.members) >= 2
+if a.w:
+    W = np.array([float(x) for x in a.w.split(",")], dtype=np.float64)
+    assert len(W) == len(a.members), "가중치 수 != 멤버 수"
+    W = W / W.sum()
+else:
+    W = np.full(len(a.members), 1.0 / len(a.members))
 
 from safetensors import safe_open
 from safetensors.numpy import save_file
@@ -41,7 +48,7 @@ for i, d in enumerate(dirs):
     with safe_open(os.path.join(d, "model.safetensors"), framework="np") as f:
         for k in f.keys():
             t = f.get_tensor(k).astype(np.float32)
-            acc[k] = t / n if i == 0 else acc[k] + t / n
+            acc[k] = t * W[i] if i == 0 else acc[k] + t * W[i]
 
 out_t = {k: v.astype(np.float16) for k, v in acc.items()}
 save_file(out_t, os.path.join(dirs[0], "model.safetensors"), metadata={"format": "pt"})
@@ -53,4 +60,4 @@ with zipfile.ZipFile(a.out, "w", zipfile.ZIP_DEFLATED) as z:
             z.write(p, os.path.relpath(p, dirs[0]))
 for d in dirs:
     shutil.rmtree(d)
-print(f"[soup] {n}개 평균 -> {a.out}  {os.path.getsize(a.out)/1e6:.0f}MB")
+print(f"[soup] {n}개 가중평균 w={np.round(W,3).tolist()} -> {a.out}  {os.path.getsize(a.out)/1e6:.0f}MB")

@@ -247,6 +247,15 @@
 5. 백로그: pairwise post-hoc(list P=0.384 저마진 스위치, crossfit), sim-only FULL, 3-way soup.
 6. 제출 캘린더: ~7/13 실험, 7/14 저녁 final 동결, 7/15 오전 제출 회피. 하루 10회 슬롯 아끼지 말 것(저위험 후보 즉시 은행).
 
+## 5.21 연구실 서버 전환 + R13 체제 (07-05 저녁) ⚡최우선 읽기
+- **컴퓨트 전환**: Colab/Kaggle 은퇴 → A6000 48GB 무제한(mun-jtrain) + 오프라인 검증 컨테이너(mun-jtest, 12g/3cpu, network none). `sim/train_and_verify.sh <TAG> <SEED>` 원커맨드 전자동(학습→패키징→check_zip→오프라인 30k→게이트+holdout). calib ratio **2.62**(A6000→서버). SERVER_SETUP.md 참조.
+- **기준선 이식 검증**: largeonly holdout **0.78113** — T4 실측과 완전 일치. 동일계열 delta 비교 유효.
+- **검증 큐 규율**: 학습 공존 시 VRAM 게이트 오염(41.5GB 실측) — holdout은 공존 OK, **시간·VRAM 게이트는 GPU 유휴시에만**. 최종 배포후보만 유휴 재측정.
+- **R13 합의(DEBATE.md)**: soup/s2 단독 LB 발사 금지(기준=tri_cond 0.78266, holdout ≥0.7833 아니면 m1 후보로만) / sim-only>dist 순위 / dist teacher는 tri_cond 3-way 재생성 / base+·v4+ weight probe는 m1 교체 후 보류 / 가중 soup 5점 비교(s1·0.25·0.5·0.75·s2).
+- **신규 도구**: soup_members.py `--w` 가중 soup / train_full_cli `AD_SIMONLY=1`(au 제외) / sim/gen_soft_labels_3way.py(3-way teacher) / `.claude/settings.json`(docker 권한+DOCKER_API_VERSION — 컨테이너 재생성시 자동 복원).
+- **m1 교체 제약**: FULL soup엔 OOF 없음 → cond-bias/th 재적합 불가, 기존 teacher-OOF bias 재사용이 원칙.
+- **자동 체인 가동**(work/r13_chain.sh): s2(2024,SWA3) → 가중 soup 3종 검증 → s3(777) → sim-only. Kaggle 커널(ad-full2-s2-dist)은 회수 불필요(로컬 재학습 대체).
+
 ## 6. 컴퓨트 운영 노하우 (colab CLI) ⚠️
 - `colab` CLI(google-colab-cli)로 전 과정 자동화: `new/upload/exec/download/stop`. 세션=라이브 커널, exec 간 상태 유지.
 - **세션 수명 ≈ 60분** (OAuth 토큰 만료 시 keep-alive 데몬이 갱신 못함 → VM 회수). **모든 작업을 55분 내 완결 + 즉시 다운로드** 설계.

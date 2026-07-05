@@ -48,6 +48,14 @@ print(f"[full] {TAG}: {MODEL} v={VERSION} len={MAX_LEN} ep={EPOCHS} lr={LR} b={B
 set_seed(SEED)
 samples, y, ids = load_train()
 y = np.array(y)
+SIMONLY = os.environ.get("AD_SIMONLY", "0") == "1"
+_keep = None
+if SIMONLY:
+    _keep = [i for i, _id in enumerate(ids) if not str(_id).startswith("sess_au")]
+    samples = [samples[i] for i in _keep]
+    y = y[_keep]
+    ids = [ids[i] for i in _keep]
+    print(f"[simonly] au 제외 학습: {len(ids)}행", flush=True)
 tok = AutoTokenizer.from_pretrained(MODEL); tok.truncation_side = "left"
 texts = [ad_lib.serialize(s, VERSION) for s in samples]
 enc_all = tok(texts, truncation=True, max_length=MAX_LEN, padding=False)
@@ -58,8 +66,13 @@ cw = len(y) / (NUM_CLASSES * np.maximum(cnt, 1)); cw /= cw.mean()
 SOFT_P = None
 if SOFT:
     _z = np.load(SOFT, allow_pickle=True)
-    assert list(_z["ids"]) == list(ids), "소프트라벨 id 순서 불일치"
-    SOFT_P = torch.tensor(_z["probs"].astype(np.float32))   # [N,14]
+    _probs = _z["probs"].astype(np.float32)
+    _zids = list(_z["ids"])
+    if SIMONLY:
+        _zids = [_zids[i] for i in _keep]
+        _probs = _probs[_keep]
+    assert _zids == list(ids), "소프트라벨 id 순서 불일치"
+    SOFT_P = torch.tensor(_probs)   # [N,14]
 
 torch.manual_seed(1234)
 model = AutoModelForSequenceClassification.from_pretrained(

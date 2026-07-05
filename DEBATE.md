@@ -110,3 +110,15 @@
 - 도달확률(codex): 0.7843(4위) 35~45% / 0.7870(3위) 5~10%(구조적 신규익 필요) / 컷 방어실패 8~12%→0.7834+ 은행 시 3~5%.
 - **90슬롯 배분표**: m1교체·soup·dist 18 / weight sweep 20 / th·조건부 10 / pairwise post-hoc 14 / 약멤버 probe 8 / sim-only 8 / 예비·막판 12.
 - 오늘 실행: base+ (0.55/0.2/0.25) 1발 + v4+ (0.55/0.15/0.3) 1발 → 커널 도착 즉시 soup/dist m1로 슬롯 전환. pairwise crossfit(eda/pairwise_posthoc.py) 병행.
+
+## R13 — 환경 전환(A6000 무제한) 후 슬레이트 재편 (07-05 저녁)
+- **환경**: Colab/Kaggle 은퇴 → 연구실 A6000 48GB(mun-jtrain) + 오프라인 검증(mun-jtest, 12g/3cpu, 대콘 재현). train_and_verify.sh 전자동 루프, calib ratio 2.62. **기준선 재현 확인: largeonly holdout 0.78113 (T4 실측과 소수점 5자리 일치)** — 판정선 이식 유효.
+- **codex 수정 5건 (전부 수용)**:
+  1. **soup 단독 LB 발사 강등**: 기준점은 largeonly가 아니라 tri_cond 0.78266. soup 기대 +0.0004~6으론 단독으론 못 넘음 → s2단독/soup 변종 전부 **m1 후보군**으로만 만들고 tri_cond 재조립 후 LB 직행.
+  2. **판정선 개정**: 절대 holdout-LB 매핑 깨짐(largeonly -0.0006 / lgb8 +0.0035 / str2q8 -0.0021, 계열의존 편향 ±0.002~4). 새 규칙: large계열 단독 제출선 holdout ≥**0.7833**(tri_cond 환산) / m1 후보 탈락선 0.7815 유지 / 동일계열 상대비교(delta)만 신뢰.
+  3. **sim-only SWA3 > dist 순위 역전** (R11 기대 +0.0008~20 > dist -0.0003~+0.0008). AD_SIMONLY 구현 완료.
+  4. **dist teacher 업그레이드**: soft_labels_str2(2-way, 상한 0.78189) 대신 **tri_cond 3-way 확률로 재생성** 후 증류 (hard0.7/soft0.3/T2/8ep+SWA3). 자기증류 성분 0.195는 무해.
+  5. **가중 soup 5점 비교**: s1/0.25/0.5/0.75/s2를 동일 holdout에서. 50:50이 양끝보다 낮으면 s1(no-SWA) 이질성 → s2+s3 동질 soup 전환. s2단독<s1이면 seed 품질 문제 → s3·sim-only 우선. soup_members.py --w 구현 완료.
+- **96슬롯 재배분(codex)**: m1교체·soup·dist·sim-only·에폭변형 32 / tri_cond 재조립·th·weight 24 / weight probe 12 / 약멤버·이종교사 6 / bias·재검증 8 / 최종·예비 14. base+/v4+ 2발은 m1 교체 전 보류.
+- **내 명확화 2건 (codex 미언급)**: ① m1 교체시 cond-bias 재적합 불가(소스=6ep teacher OOF, FULL soup엔 OOF 없음) → 기존 teacher-OOF bias·th 재사용이 원칙, "재적합"은 OOF 가진 조합만. ② 검증 큐 규율: 학습 공존시 VRAM 게이트 오염(41.5GB 실측) — holdout은 공존 허용, **시간·VRAM 게이트는 GPU 유휴시에만 유효**.
+- **합의 실행순서**: s2 검증 → 가중 s1/s2 soup 5점 → m1 치환 tri_cond 오프라인 → s3(777)+sim-only 학습 → greedy 3~5 seed soup → tri_cond-teacher dist → best 기준 th/weight → LB.
