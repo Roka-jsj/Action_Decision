@@ -99,3 +99,14 @@
 - codex 기타: 손실개선(R-Drop/LS/focal)은 bias와 중복, -0.001~+0.001로 하향(기각 유지). **pairwise post-hoc(list_directory 저마진 스위치) +0.0005~0.0015 crossfit 필요(백로그).** au제외 FULL(sim-only) +0.0008~0.0020(백로그, GPU 확보시). ONNX/jit 기각 합의. 서버 3vCPU 마진: 토크나이즈<126s면 안전, 후보 p95≤500s 통과 / 500~540s 고득점시만 / >540s 폐기.
 - 상위팀 추정(codex): 0.784~0.787 = 직렬화+sim-only+soup/증류/조건부TTA 조합권. 0.790+ = 구조 활용 or 합성데이터 가능성(우리 posmap 기각으로 전자는 의문).
 - 제출 캘린더: ~7/13 실험, 7/14 저녁 final 고정, 7/15 오전 제출 회피.
+
+## R12 — LB 직접최적화 체제 확립 (07-05 오후)
+- **공동 결론: private=public(동일 30k, 결정적) → LB는 노이즈가 아니라 최종 목적함수 그 자체.** 스윕은 "일반화 추정"이 아니라 "고정 함수 힐클라이밍". 단 다음 수 선택의 추론에는 해상도 규칙 필요.
+- **codex 스윕 판정규칙(채택)**: Δ<+0.00025 무승부 / ≥+0.00035 방향 후보 / ≥+0.0007 축 인정. 가중치는 1축씩 0.05 coarse → 승자만 0.02 refine. 3축 grid 금지.
+- **codex가 내 Wave1을 부숨(수용)**: 가중스윕 EV ±0.0002~5로 저가치(OOF 곡률 평평). 주축 = ①m1 교체(soup/dist) ②pairwise/class post-hoc(macro-F1 특성상 global weight보다 ROI↑) ③조건부 멤버 확장 ④weight refine은 마지막.
+- th 0.65 기대 +0.00005~0.00018 (cond2 역산: 35% 조건부가 이미 full 이득의 79% 회수, 잔여 0.00027뿐) → best m1 확정 후 1발만.
+- klue 재시험 허용: w=0.03~0.05 저가중 1발만(스태커 -0.014 전과로 global 기대 음수), <+0.00025면 영구 폐기.
+- soup/dist 기대(중앙값): s2교체 -0.0005~+0.0007 / s1+s2 soup +0.0004~6 / dist -0.0003~+0.0008 / soup+dist 멤버화 +0.0006~14(시간위험, 조건부로). **cross-seed weight soup은 LB 1발 전 동일계열 holdout 붕괴점검 필수.**
+- 도달확률(codex): 0.7843(4위) 35~45% / 0.7870(3위) 5~10%(구조적 신규익 필요) / 컷 방어실패 8~12%→0.7834+ 은행 시 3~5%.
+- **90슬롯 배분표**: m1교체·soup·dist 18 / weight sweep 20 / th·조건부 10 / pairwise post-hoc 14 / 약멤버 probe 8 / sim-only 8 / 예비·막판 12.
+- 오늘 실행: base+ (0.55/0.2/0.25) 1발 + v4+ (0.55/0.15/0.3) 1발 → 커널 도착 즉시 soup/dist m1로 슬롯 전환. pairwise crossfit(eda/pairwise_posthoc.py) 병행.
