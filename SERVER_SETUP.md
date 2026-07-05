@@ -68,13 +68,17 @@ cd /workspace && git clone https://github.com/Roka-jsj/Action_Decision.git . \
   || git clone https://github.com/Roka-jsj/Action_Decision.git && cd Action_Decision || true
 git config user.name "Roka-jsj" && git config user.email "vasebull@gmail.com"
 
-# kaggle 인증 + 데이터·멤버 번들
+# kaggle 인증 — ⚠️ cat 히어독 금지(블록 통붙여넣기 시 뒷줄을 파일내용으로 삼킴). echo 한 줄로:
 pip install -q kaggle
-mkdir -p ~/.kaggle && cat > ~/.kaggle/kaggle.json   # kaggle.json 내용 붙여넣기 → Enter → Ctrl+D
+mkdir -p ~/.kaggle
+echo '{"username":"<KAGGLE_USERNAME>","key":"<KAGGLE_KEY>"}' > ~/.kaggle/kaggle.json
 chmod 600 ~/.kaggle/kaggle.json
+
+# 데이터·멤버 번들 + 부트스트랩
+cd /workspace
 kaggle datasets download tistmesp03/ad236694-train-bundle -p ./bundle --unzip
 apt-get update -qq && apt-get install -y -qq zip unzip
-bash sim/server_bootstrap.sh ./bundle
+bash sim/server_bootstrap.sh ./bundle   # 끝에 "bootstrap OK: 70000 samples" 확인
 ```
 
 ### Claude Code / codex — VS Code 확장으로 접속
