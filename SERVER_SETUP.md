@@ -79,12 +79,12 @@ docker ps        # 소켓 확인 (컨테이너 목록 보이면 OK; "client vers
 pip install -q kaggle
 mkdir -p ~/.kaggle
 ```
-**블록 2 (kaggle 인증)** — ⚠️ `<...>`는 자리표시자: kaggle.com→Settings→API→Create New Token으로 받은 **실제 username/key로 교체**해서 실행:
+**블록 2 (kaggle 인증 — 대화형이라 붙여넣기 사고 불가)**:
+kaggle.com→Settings→API→Create New Token으로 받은 kaggle.json에서 **key 값만 복사**해 두고, 아래 실행 → 입력창에 key 붙여넣고 Enter:
 ```bash
-echo '{"username":"실제username","key":"실제key"}' > ~/.kaggle/kaggle.json && chmod 600 ~/.kaggle/kaggle.json
-python3 -c "import json;json.load(open('/root/.kaggle/kaggle.json'));print('json OK')"
+read -p "Kaggle key 붙여넣기: " K && echo "{\"username\":\"tistmesp03\",\"key\":\"$K\"}" > ~/.kaggle/kaggle.json && chmod 600 ~/.kaggle/kaggle.json && python3 -c "import json;d=json.load(open('/root/.kaggle/kaggle.json'));assert d['key'].isascii() and len(d['key'])>20, 'key 형식 이상';print('json OK:', d['username'])"
 ```
-(pip가 DNS 오류나면: `echo 'nameserver 8.8.8.8' >> /etc/resolv.conf` 후 재시도)
+`json OK: tistmesp03` 확인. (pip DNS 오류 시: `echo 'nameserver 8.8.8.8' >> /etc/resolv.conf` 후 재시도)
 **블록 3 (데이터·멤버 반입 + 부트스트랩)**:
 ```bash
 cd /workspace
