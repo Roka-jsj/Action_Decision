@@ -16,6 +16,10 @@ for z in ["open.zip", "ad_common.zip"]:
         with zipfile.ZipFile(z) as f:
             f.extractall(".")
 sys.path.insert(0, WORK)
+# 서버(컨테이너) 배치: common/이 WORK가 아니라 저장소 루트에 있으면 루트도 경로에 추가
+_REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+if os.path.isdir(os.path.join(_REPO, "common")):
+    sys.path.insert(0, _REPO)
 
 import numpy as np, torch
 from common.io_utils import load_train, CLASSES, NUM_CLASSES, set_seed
