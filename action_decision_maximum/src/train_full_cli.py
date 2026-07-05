@@ -146,31 +146,35 @@ for ep in range(EPOCHS):
             for k in swa_sum: swa_sum[k] += sd[k]
         swa_n += 1
         print(f"  [swa] snapshot ep{ep+1} ({swa_n}/{SWA_K})", flush=True)
+def save_member(tag):
+    # 저장 → (옵션) 프루닝 → zip. 반환: zip 경로
+    raw_dir = os.path.join(WORK, f"raw_{tag}")
+    model.half().save_pretrained(raw_dir, safe_serialization=True)
+    tok.save_pretrained(raw_dir)
+    out_dir = os.path.join(WORK, f"member_{tag}")
+    if PRUNE:
+        K, _ = prune_model_dir(raw_dir, out_dir, tok, texts, max_len=MAX_LEN)
+        print(f"[prune] vocab -> {K}", flush=True)
+    else:
+        shutil.copytree(raw_dir, out_dir, dirs_exist_ok=True)
+    mb = sum(os.path.getsize(os.path.join(r, f)) for r, _, fs in os.walk(out_dir) for f in fs) / 1e6
+    print(f"[member] {out_dir} size={mb:.0f}MB", flush=True)
+    zp = os.path.join(WORK, f"member_{tag}.zip")
+    with zipfile.ZipFile(zp, "w", zipfile.ZIP_DEFLATED) as z:
+        for r, _, fs in os.walk(out_dir):
+            for f in fs:
+                z.write(os.path.join(r, f), os.path.relpath(os.path.join(r, f), out_dir))
+    print(f"[zip] {zp} {os.path.getsize(zp)/1e6:.0f}MB", flush=True)
+    return mb
+
 if swa_sum is not None and swa_n > 1:
+    save_member(TAG + "raw")   # SWA 적용 전 raw-final 멤버도 저장 (SWA 해악 분리실험, R13)
     fin = model.state_dict()
     for k, v in swa_sum.items():
         fin[k] = (v / swa_n).to(fin[k].dtype)
     model.load_state_dict(fin)
     print(f"[swa] {swa_n}개 에폭 평균 적용", flush=True)
 
-# 저장 → (옵션) 프루닝
-raw_dir = os.path.join(WORK, f"raw_{TAG}")
-model.half().save_pretrained(raw_dir, safe_serialization=True)
-tok.save_pretrained(raw_dir)
-out_dir = os.path.join(WORK, f"member_{TAG}")
-if PRUNE:
-    K, _ = prune_model_dir(raw_dir, out_dir, tok, texts, max_len=MAX_LEN)
-    print(f"[prune] vocab -> {K}", flush=True)
-else:
-    shutil.copytree(raw_dir, out_dir, dirs_exist_ok=True)
-mb = sum(os.path.getsize(os.path.join(r, f)) for r, _, fs in os.walk(out_dir) for f in fs) / 1e6
-print(f"[member] {out_dir} size={mb:.0f}MB", flush=True)
-
-zp = os.path.join(WORK, f"member_{TAG}.zip")
-with zipfile.ZipFile(zp, "w", zipfile.ZIP_DEFLATED) as z:
-    for r, _, fs in os.walk(out_dir):
-        for f in fs:
-            z.write(os.path.join(r, f), os.path.relpath(os.path.join(r, f), out_dir))
-print(f"[zip] {zp} {os.path.getsize(zp)/1e6:.0f}MB", flush=True)
+mb = save_member(TAG)
 open(os.path.join(WORK, f"DONE_{TAG}"), "w").write(f"size={mb:.0f}MB time={(time.time()-t0)/60:.1f}min")
 print("=== DONE ===", flush=True)
