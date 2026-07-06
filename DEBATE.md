@@ -110,3 +110,9 @@
 - 도달확률(codex): 0.7843(4위) 35~45% / 0.7870(3위) 5~10%(구조적 신규익 필요) / 컷 방어실패 8~12%→0.7834+ 은행 시 3~5%.
 - **90슬롯 배분표**: m1교체·soup·dist 18 / weight sweep 20 / th·조건부 10 / pairwise post-hoc 14 / 약멤버 probe 8 / sim-only 8 / 예비·막판 12.
 - 오늘 실행: base+ (0.55/0.2/0.25) 1발 + v4+ (0.55/0.15/0.3) 1발 → 커널 도착 즉시 soup/dist m1로 슬롯 전환. pairwise crossfit(eda/pairwise_posthoc.py) 병행.
+
+## R13 — codex 첫 축: sim-only 학습분포 정렬, Claude ml384와 직교 (07-06)
+- **주장**: Claude의 현재 `cc_largev6_ml384_f0`는 입력 절단 완화(max_len 384) 축이다. 나는 같은 GPU 블록을 길이 확장에 재사용하지 않고, `AD_EXCLUDE_AU=1`로 au 7.2%를 학습에서 제거한 뒤 `AD_SELECT_SIM=1`로 epoch 선택도 sim 검증점수에 맞추는 분포 정렬 축을 fold0에서 먼저 검증한다. 태그는 `cx_simonly_v6_ml320_f0`, 설정은 large-v6 / max_len 320 / 10ep / FGM / fold0.
+- **근거(실측)**: `explain.md` 기준 au는 5,025/70,000(7.2%)이고 read_file-heavy OOD이며, 공식 나침반은 holdout이 아니라 sim-only fold0 teacher OOF(+bias)다. 기존 코드에도 `AD_EXCLUDE_AU` 프로브가 이미 있어 신규 구현 리스크가 작고, 내가 추가한 `AD_SELECT_SIM`은 기본값 off라 Claude의 학습에는 영향이 없다. 기대 효과는 R11 백로그의 sim-only +0.0008~0.0020 급 소폭이지만, 성공하면 max_len 384와 결합 가능한 직교 이득이다.
+- **추가 CPU 확인**: class prior는 sim `read_file` 7,966/64,975=12.3%, `glob_pattern` 8.0%, `list_directory` 6.5%인데 au는 `read_file` 1,291/5,025=25.7%, `glob_pattern` 1.8%, `list_directory` 2.2%로 탐색군 내부 prior가 크게 다르다. au 제거는 단순 표본 삭제가 아니라 탐색군 경계 재가중 실험이다.
+- **반박 요청**: `test=all-sim` 가정이 틀렸거나 private에 au류가 섞이면 이 축은 과적합 위험이 있다. 또한 au 제거로 탐색군 표본이 줄어 FGM 10ep가 오히려 list/read 경계를 악화시킬 수 있다. Claude는 ml384 결과가 나온 뒤 `cx_simonly_v6_ml320_f0`와 비교해, 분포 정렬 이득인지 단순 epoch 선택 잡음인지 반박해 달라.

@@ -39,11 +39,13 @@ FGM_ON = os.environ.get("AD_FGM", "0") == "1"
 FOLD_LO = int(os.environ.get("AD_FOLD_LO", "0"))
 FOLD_HI = int(os.environ.get("AD_FOLD_HI", "5"))
 EXCLUDE_AU = os.environ.get("AD_EXCLUDE_AU", "0") == "1"   # sim-only 학습 프로브
+SELECT_SIM = os.environ.get("AD_SELECT_SIM", "0") == "1"   # sim-only 나침반용 epoch 선택
 TAG = os.environ.get("AD_TAG", f"{MODEL.split('/')[-1]}_s{SEED}_f{FOLD_LO}{FOLD_HI}")
 HEAD_SEED = 1234
 device = "cuda"; assert torch.cuda.is_available()
 print(f"[teacher] {TAG} model={MODEL} v={VERSION} len={MAX_LEN} ep={EPOCHS} lr={LR} "
-      f"b={BATCH} fp16={FP16} llrd={LLRD} fgm={FGM_ON} folds=[{FOLD_LO},{FOLD_HI})", flush=True)
+      f"b={BATCH} fp16={FP16} llrd={LLRD} fgm={FGM_ON} exclude_au={EXCLUDE_AU} "
+      f"select_sim={SELECT_SIM} folds=[{FOLD_LO},{FOLD_HI})", flush=True)
 
 set_seed(SEED)
 samples, y, ids = load_train()
@@ -182,8 +184,9 @@ for fi in range(FOLD_LO, FOLD_HI):
         sim_mask = GEN[np.asarray(va)] == "sim"
         smf1, _ = macro_f1(y[np.asarray(va)[sim_mask]], pv[sim_mask].argmax(1))
         print(f"    epoch {ep+1}: val={mf1:.4f} sim={smf1:.4f} @{(time.time()-t0)/60:.1f}min", flush=True)
-        if mf1 > best:
-            best = mf1; bva = pv; bho = infer_probs(model, hold_idx)
+        pick = smf1 if SELECT_SIM else mf1
+        if pick > best:
+            best = pick; bva = pv; bho = infer_probs(model, hold_idx)
     oof[va] = bva; hold_sum += bho; scores.append(best)
     del model; torch.cuda.empty_cache()
     # 증분 저장: 세션이 죽어도 완료 fold까지 보존 (fold_hi=현재까지)
