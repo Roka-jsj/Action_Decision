@@ -205,40 +205,66 @@ def serialize(sample, version="v3", max_hist_turns=8):
             la = f" [LAST] {nm}{('('+ext+')') if ext else ''} [{st}] {rs[:100]}"
         return f"[CUR] {prompt}{la}"
     m = meta_fields(sample)
-    parts = [f"[TIER] {m['user_tier']} [LANG] {m['language_pref']} [TURN] {_turn_bin(m['turn_index'])} "
-             f"[CI] {m['last_ci_status']} [GIT] {'dirty' if m['git_dirty'] else 'clean'}"]
-    if version in ("v4", "v5", "v6", "v7", "v6n"):
-        # v6n = v6에서 [GEN] 제거 (id-prefix 파생 토큰 — 히든 id 무표식(World A)이면 train/serve 스큐 유발, R15)
+    _metaver = ("v4", "v5", "v6", "v7", "v6n", "v8")
+    _seqver = ("v6", "v7", "v6n", "v8")
+    hdr = (f"[TIER] {m['user_tier']} [LANG] {m['language_pref']} [TURN] {_turn_bin(m['turn_index'])} "
+           f"[CI] {m['last_ci_status']} [GIT] {'dirty' if m['git_dirty'] else 'clean'}")
+    gen_blk = None
+    openext = None
+    if version in _metaver:
+        # v6n = [GEN] 제거(R15). v8 = 메타/[GEN]를 꼬리로 이동(좌측절단 생존, R18 H2)
         gen_part = "" if version == "v6n" else f"[GEN] {_gen(sample.get('id',''))} "
-        parts.append(f"{gen_part}[BUDGET] {_budget_bin(m['budget'])} "
-                     f"[LOC] {_loc_bin(m['loc'])} [TOPLANG] {m['top_lang']} [NOPEN] {m['n_open_files']}")
+        gen_blk = (f"{gen_part}[BUDGET] {_budget_bin(m['budget'])} "
+                   f"[LOC] {_loc_bin(m['loc'])} [TOPLANG] {m['top_lang']} [NOPEN] {m['n_open_files']}")
         if m["open_files"]:
             if version == "v5":
-                # v5: 열린 파일 실제 경로(최대 5) — 다음 행동 대상 힌트
-                parts.append(f"[OPEN] {' '.join(p[:60] for p in m['open_files'][:5])}")
+                openext = f"[OPEN] {' '.join(p[:60] for p in m['open_files'][:5])}"
             else:
                 exts = sorted({path_ext(p) for p in m["open_files"] if path_ext(p)})
                 if exts:
-                    parts.append(f"[OPENEXT] {','.join(exts)}")
+                    openext = f"[OPENEXT] {','.join(exts)}"
     full_hist = sample.get("history") or []
     hist = full_hist[-max_hist_turns:]
+    hist_parts = []
     if hist:
-        parts.append("[HIST]")
+        hist_parts.append("[HIST]")
         for t in hist:
             if t.get("role") == "user":
-                parts.append(f"u: {(t.get('content') or '')[:150]}")
+                hist_parts.append(f"u: {(t.get('content') or '')[:150]}")
             elif t.get("role") == "assistant_action":
-                parts.append(f"a: {_fmt_action(t, with_args=(version in ('v4', 'v6', 'v7', 'v6n')), full_args=(version == 'v5'))}")
-    if version in ("v6", "v7", "v6n"):
-        # 좌측절단 생존 위치(끝쪽): 압축 액션 트레일 + 세션시작 마커 + 프롬프트 패턴 플래그
+                hist_parts.append(f"a: {_fmt_action(t, with_args=(version in ('v4', 'v6', 'v7', 'v6n', 'v8')), full_args=(version == 'v5'))}")
+    seq_parts = []
+    if version in _seqver:
         seq = [t.get("name", "") for t in full_hist if t.get("role") == "assistant_action"]
-        parts.append(f"[SEQ] {'>'.join(seq[-12:]) if seq else 'none'}")
+        seq_parts.append(f"[SEQ] {'>'.join(seq[-12:]) if seq else 'none'}")
         if not full_hist:
-            parts.append("[NOHIST]")
-        parts.append(f"[PFLAG] {_prompt_flags(prompt, m['open_files'])}")
+            seq_parts.append("[NOHIST]")
+    pflag = f"[PFLAG] {_prompt_flags(prompt, m['open_files'])}" if version in _seqver else None
+
+    if version == "v8":
+        # 꼬리 재배치: [HIST](가장 오래됨=절단 1순위) → [SEQ] → 메타헤더+[GEN] → [PFLAG] → [CUR].
+        # 좌측절단이 [HIST]부터 먹어 [GEN]/메타가 320창서 항상 생존 (v6는 긴세션 10.8%서 [GEN] 소실).
+        parts = list(hist_parts) + list(seq_parts) + [hdr]
+        if gen_blk:
+            parts.append(gen_blk)
+        if openext:
+            parts.append(openext)
+        if pflag:
+            parts.append(pflag)
+        parts.append(f"[CUR] {prompt}")
+        return " ".join(parts)
+
+    # v4~v7·v6n: 기존 순서(메타헤더 앞) — v6 바이트 동일 보장
+    parts = [hdr]
+    if gen_blk is not None:
+        parts.append(gen_blk)
+        if openext:
+            parts.append(openext)
+    parts += hist_parts
+    parts += seq_parts
+    if pflag:
+        parts.append(pflag)
     if version == "v7":
-        # v7 = v6 + [PACE]: elapsed_sec(직렬화 이력상 완전 미노출)와 진행속도 bin.
-        # 실측: 탐색4class 구성이 elapsed에 단조 이동(list 22%→6%, glob 12%→25%) — meta_probe GO 근거.
         parts.append(f"[PACE] {_elapsed_bin(m['elapsed'])} {_pace_bin(m['elapsed'], m['turn_index'])}")
     parts.append(f"[CUR] {prompt}")
     return " ".join(parts)
