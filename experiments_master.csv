@@ -63,3 +63,4 @@ verify_largev6n,2026-07-06,B,large v6n(no-GEN)+SWA3,v6n,320,weighted-ce,FULL(8ep
 verify_largev6nraw,2026-07-06,B,large v6n raw(noSWA no-GEN),v6n,320,weighted-ce,FULL(8ep),,,0.80224,,분해: sim 0.80155(s1 +0.0032 승!)/au 0.74314(부분암기). 서버환산 354s PASS. World A/B 우세·C 동급 후보 — fold0 정직치 대기
 dist_final,2026-07-06,B,dist3raw 분해,v6,320,kd,rescore,,,,,sim 0.79066(s1 -0.008 열세)/au 0.94216(암기) — dist 전체점수는 au암기 착시. 기각 확정
 v6n_fold0_honest,2026-07-06,B,v6n fold0 6ep 정직프로브,v6n,320,weighted-ce,fold0,0.7327,,,,정직비교: v6n sim 0.7427 ≈ v6 sim 0.7437(-0.001 동률!) / au 0.60≈v6 0.6047(내용으로 회복). FULL holdout +0.0032 sim은 암기착시였으나 sim 무손실 확인 → World A서 au회복 순이득. 제출후보 확정
+lb_v6nraw,2026-07-06,B,large v6n raw 배포,v6n,320,weighted-ce,LB실측,,,,0.73371,폭락-0.047! World A/B 동시기각→World C확정([GEN]필수·테스트 id 표식有). fold0 0.7327≈LB 0.7337 정합. GEN은 v6 FULL부스트(+0.041)의 열쇠. no-GEN 영구폐기

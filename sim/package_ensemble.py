@@ -18,6 +18,8 @@ ap.add_argument("--stacker", default="")          # 비우면 mean 앙상블(스
 ap.add_argument("--bias", default="")             # mean 모드에서 per-class bias 적합용 teacher npz glob
 ap.add_argument("--weights", default="")          # mean 모드 멤버 가중치 "0.65,0.35" (비우면 균등)
 ap.add_argument("--margin_th", type=float, default=0)  # >0이면 조건부 2-pass(m1 마진<th만 m2 혼합)
+ap.add_argument("--dual", type=int, default=0)          # 1=듀얼 bias(sim/au 서브셋 적합, R14/World C)
+ap.add_argument("--dual_shrink", type=float, default=1.0)  # bias_au/sim ← λ*서브셋 + (1-λ)*글로벌
 ap.add_argument("--member", action="append", required=True)
 ap.add_argument("--version", default="v4")
 ap.add_argument("--max_len", type=int, default=320)
@@ -112,9 +114,21 @@ if MEAN and a.bias:
         mean_oof = sum(w * o for w, o in zip(W, oofs)) / sum(W)
     else:
         mean_oof = sum(oofs) / len(oofs)
-    b, _ = fit_bias(np.log(mean_oof[cov] + 1e-9), y[cov])
+    lp_mean = np.log(mean_oof + 1e-9)
+    b, _ = fit_bias(lp_mean[cov], y[cov])
+    extra = None
+    if a.dual:
+        auk = np.char.startswith(np.array([str(i) for i in ids]), "sess_au")
+        cov_au, cov_sim = cov[auk[cov]], cov[~auk[cov]]
+        b_au, _ = fit_bias(lp_mean[cov_au], y[cov_au])
+        b_sim, _ = fit_bias(lp_mean[cov_sim], y[cov_sim])
+        lam = a.dual_shrink
+        extra = {"bias_sim": lam * np.array(b_sim) + (1 - lam) * np.array(b),
+                 "bias_au": lam * np.array(b_au) + (1 - lam) * np.array(b)}
+        print(f"[dual-bias] au {len(cov_au)}행 / sim {len(cov_sim)}행 (λ={lam})")
     save_bias(os.path.join(mdl, "postproc.json"), b, meta={"mean_ensemble": True, "weights": W,
-                                                           "margin_th": a.margin_th or None})
+                                                           "margin_th": a.margin_th or None},
+              extra_biases=extra)
     print(f"[mean-bias] fit on {len(oofs)} member OOF {'weighted ' + str(W) if W else 'avg'}")
 json.dump(rm, open(os.path.join(mdl, "run_meta.json"), "w"))
 shutil.copy(os.path.join(ROOT, "common", "server_script.py"), os.path.join(pkg, "script.py"))
