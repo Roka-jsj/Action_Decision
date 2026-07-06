@@ -150,3 +150,10 @@
 - **largeonly_dual 무전이 시 폴백**: id prefix 우선 + 미검출행만 au감지기(th0.99) 보조 라우팅.
 - 실행순서(codex): largeonly_dual 1발 → 성공시 tri_cond_dual 재양자화 1발 → λ/shrink 미세 1~2발 → 실패시 detector-routing → 나머지 예비.
 - **죽은 축 최종**: soup(V자)·SWA(-0.006)·sim-only·dist(-0.008)·no-GEN(-0.047)·메타v7(-0.008)·reranker/ngram/klue/posmap.
+
+## R17 — 듀얼 bias LB 반증, 천장 판정 (07-06)
+- **실측**: largeonly_dual 0.78038(-0.00013, 라우팅 발동=World C 직접확증) / tri_cond_dual 0.78179(**-0.00087 악화**). OOF 프록시 +0.00208은 반증됨(au OOF 4622행 과적합). **듀얼bias·detector라우팅 완전 폐기.**
+- codex 판정: ① 듀얼 λ shrinkage best case=글로벌 회귀(상방0) ② th/weight로 5위 **<1%** ③ **0.78266이 파이프라인 천장 후보 확정** ④ 도달확률: H1 prior probe 5~8% / 10-12ep단일 3~5% / th/weight <1% / 합쳐 ~10%.
+- **codex의 유일 살아있는 축 = label-shift 보정**: marginal count만으론 macro-F1 bias 최적화 불가(F1은 TP/FP/FN 구조 필요). 단 **OOF confusion P(pred|true) + LB-probe π_test로 재가중 → expected macro-F1 재탐색**은 유효. prior 동일이면 천장 확정 진단.
+- 실행순서(codex): H1 6발 prior확정 → OOF-confusion prior-reweight bias → 1발 → (실패시)10/12ep honest gate → th/weight → 은행방어.
+- **⚠ 사용자 지시로 R18 개시**: codex R17이 보수적(천장 인정)이나, 데이터구조·아키텍처·하네스 전공간 재조사(워크플로 4각) 후 혁신 가설로 적대적 재점화. codex를 물어뜯게 만들 것.
