@@ -135,3 +135,18 @@
 - codex Q4: dist 교체선 = raw 기준 s1+0.0003(≥0.78143), tri_cond 재조립은 기존 대비 +0.0005↑일 때만 LB
 - codex Q5 도달확률: 듀얼 성공시 5위 55~70% / 부분성공 30~45% / 실패 12~20%. 슬롯: 듀얼 8-12, dist 8-12, H1 2-4, th/weight 10-14, 약멤버 4-6, 예비 20+
 - **구현 완료**: postproc 3-bias 저장 + ad_lib 행별 선택 + package_single --dual/--dual_shrink + **검증셋 id 원본보존**(prefix 의존 경로 실전동일 — 하네스 수리) + eda/dual_lambda_sweep.py(배포모델 확률 1회 추론 후 즉석 λ스윕)
+
+## R15 — [GEN] 버그 발견·3세계 판별트리 (07-06 새벽)
+- 발견: v4+ 직렬화 [GEN] 토큰 = `id.startswith("sess_au_")` 파생. 구 검증하네스(ho:: id변조)가 au행을 [GEN]sim으로 오서빙 → au 0.523(정상 0.945). 하네스 수리(id 원본보존) + anon 모드(id 익명화=히든 무표식 재현) 신설.
+- **3세계 가설**: A=무표식혼합(au 버려짐→수리시 +0.005~15 최대레버) / B=all-sim / C=표식혼합(GEN 정상, 듀얼bias 발동).
+- 판별도구: probe_read_file(상수제출 n_c역산) + largeonly_dual + au감지기(LGB 콘텐츠, 행AUC 0.974 th0.99 P0.998).
+- v6n(no-GEN) 직렬화 구현 + FULL 학습(World A 무기 선행). dist 기각(sim -0.008). codex: 제출순서 largeonly_dual 먼저, A1(no-GEN재학습)>A2(감지기복원)>A4.
+
+## R16 — v6n 폭락(-0.047)이 World C 확정 (07-06 아침) ⚡map 재편
+- **submit_largev6nraw LB = 0.73371** (largeonly 0.78051 대비 -0.047). fold0 정직 0.7327 ≈ LB 0.7337 정합 → 학습실패 아닌 진짜 no-GEN 천장.
+- **3세계 판별 종료 → World C 확정**: A라면 v6n이 au회복해 올라야(반대) / B라면 [GEN]상수라 -0.047 붕괴불가 / ∴ C = 테스트 id 표식有·[GEN] 정상서빙·필수신호. v6n==v6−[GEN] 불일치 0 재확인(codex 유보 해소).
+- **핵심 해석**: [GEN]이 v6 FULL부스트(+0.041)의 열쇠(id파생+암기/분포정렬). no-GEN은 그 부스트 0. → **no-GEN 영구폐기**. 단일모델 천장 = v6 0.78051.
+- codex 전면승인. 남은 상방: **듀얼bias(+0.002)가 유일 깨끗한 레버** → largeonly_dual(확인)→tri_cond_dual(0.7847=5위). 이후는 gen×class bias 정밀화(+0.0003~0.001, au OOF 4622행 과신 금지·shrinkage). 
+- **largeonly_dual 무전이 시 폴백**: id prefix 우선 + 미검출행만 au감지기(th0.99) 보조 라우팅.
+- 실행순서(codex): largeonly_dual 1발 → 성공시 tri_cond_dual 재양자화 1발 → λ/shrink 미세 1~2발 → 실패시 detector-routing → 나머지 예비.
+- **죽은 축 최종**: soup(V자)·SWA(-0.006)·sim-only·dist(-0.008)·no-GEN(-0.047)·메타v7(-0.008)·reranker/ngram/klue/posmap.

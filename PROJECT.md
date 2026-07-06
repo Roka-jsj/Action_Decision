@@ -256,6 +256,17 @@
 - **m1 교체 제약**: FULL soup엔 OOF 없음 → cond-bias/th 재적합 불가, 기존 teacher-OOF bias 재사용이 원칙.
 - **자동 체인 가동**(work/r13_chain.sh): s2(2024,SWA3) → 가중 soup 3종 검증 → s3(777) → sim-only. Kaggle 커널(ad-full2-s2-dist)은 회수 불필요(로컬 재학습 대체).
 
+## 5.22 R15~R16 스냅샷 (07-06 아침) ⚡최우선 읽기
+- **LB 은행 최고 tri_cond 0.78266** (m1=largev6-8ep-q8 w0.6 + m2=basev6e5 w0.15 전체 + m3=largev4-8ep-q8 w0.25 저마진th0.5 조건부). 5위 0.78429까지 +0.0016.
+- **[GEN] 토큰 = id 파생 판명 → World C 확정** (v6n no-GEN 재학습 LB 0.7337 폭락 -0.047). 함의: 테스트 id에 sess_au 표식 존재, [GEN] 필수, au는 이미 정상처리. **no-GEN·soup·SWA·sim-only·dist 전부 사망.**
+- **유일 남은 레버 = 듀얼 bias**(id prefix로 au행에 bias_au 라우팅, teacher-OOF 프록시 +0.00208). 
+- **즉시 실행 (제출 대기 중)**:
+  1. 🔴 `packages/submit_largeonly_dual.zip` 제출 → 듀얼 LB 전이 확인 (0.78051→~0.7825 예상, 확인용). 
+  2. 성공 시: q8 재양자화(진행중 member_largefullv6_q8·largev4_8ep_q8) → `package_ensemble --dual 1 --margin_th 0.5 --weights 0.6,0.15,0.25 --member ...q8 --member basev6e5 --member ...v4q8 --bias "<v6teacher>,<basev6teacher>,<v4teacher>"` → tri_cond_dual (~0.7847=5위) → 오프라인검증 → 제출.
+  3. λ/shrink 미세조정 1~2발. 실패 시 au감지기(AUC 0.974, th0.99) 라우팅 폴백.
+- **신 하네스 규율**: anon 모드(id 익명화)로 World A 재현 가능 / 검증셋 id 원본보존(prefix 경로 실전동일) / calib 2.62 / holdout 절대치는 FULL 암기팽창 — 동일계열 delta·fold0 정직치·LB만 신뢰.
+- **도구**: eda/au_detector.py, eda/dual_lambda_sweep.py, eda/simbias_probe.py, package_single/ensemble --dual, train_full_cli AD_SIMONLY, sim/gen_soft_labels_3way.py. 전부 jeong 브랜치.
+
 ## 6. 컴퓨트 운영 노하우 (colab CLI) ⚠️
 - `colab` CLI(google-colab-cli)로 전 과정 자동화: `new/upload/exec/download/stop`. 세션=라이브 커널, exec 간 상태 유지.
 - **세션 수명 ≈ 60분** (OAuth 토큰 만료 시 keep-alive 데몬이 갱신 못함 → VM 회수). **모든 작업을 55분 내 완결 + 즉시 다운로드** 설계.
