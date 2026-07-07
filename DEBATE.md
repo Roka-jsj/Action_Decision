@@ -168,3 +168,15 @@
 - Bayes바닥 진단은 키 99% 유니크로 암기착시(무효) — 단 v8 +0.0138이 "회복가능 신호 존재"를 직접증명(절단버그≠Bayes바닥).
 - **v8 함대 체인 발사**: folds1-4 교사(OOF/bias) → FULL-8ep(SWA없음) → largeonly-v8 패키징+검증 → LB. v6 바이트동일 보장(0/30). fold1 재현 확인 후 FULL 확정.
 - **다음 R19 쟁점**: v8 FULL-LB 전이율(fold0 +0.0138 → LB 얼마?), v8을 tri_cond m1에 이식, v8 멀티시드/8ep, [GEN]류 추가세분화(과적합 경계).
+
+## R19 — v8 LB 반전(0.77819), 오프라인 메트릭 사망 확정 (07-07)
+- **submit_largev8 LB 0.77819**: v6 largeonly 0.78051 대비 **-0.0023**, 은행 0.78266 대비 -0.0045. fold OOF +0.0142(전폴드 견고)가 LB 역전. FULL부스트 v6 +0.0428 vs v8 **+0.0263**(재배치가 숨은 LB전이 -0.0165 깎음).
+- **층화진단**: v8이득 전구간 균일, **hist=0(절단0%)이 최대 +0.0178** → 절단복원 가설 완전기각. 이득원=[CUR]인접 재배치.
+- **codex 진단(수정승인)**: v8은 정보복원이 아니라 **[GEN]의 coarse-prior 사용 → GEN×prompt 상호작용 shortcut 전환**. train 생태계 전폴드서 먹히나 hidden서 조건부관계 다름 → 손해.
+- **4연속 OOF→LB 반전 확정**(dual/lgb8/str2q8/v8). codex: OOF는 noisy가 아니라 **hidden서 깨지는 latent shortcut을 그대로 보상하는 구조**. 방향성 없음(false-neg·false-pos 둘 다). **신규모델·직렬화 OOF판정 영구금지.**
+- **신뢰 3원천**: ①LB양성 구성요소 소재조합 ②LB프로브 prior→OOF confusion 재가중 bias보정 ③적대적split(GEN/template/source leave-out) 생존. **은행 0.78266=검증된 천장**(임시 아님). 방어가 기본.
+- 히든-대표 오프라인 oracle은 원천불가(공개5건으론 고차 조건부분포 못봄). 가능한 건 v8류 사전차단 **failure filter**뿐.
+
+## R20 — "모든 전략" 캠페인 (07-07, 사용자 지시) 진행중
+- 14개 상수클래스 프로브 zip 생성(prior 역산: n_c=30000·14M/(2-14M)). prior_from_probe.py + labelshift_bias.py(자기검증 통과, test=train시 0.7501 수렴) 준비완료.
+- codex에 캠페인 잠금 요청: A(prior프로브+label-shift) B(LB양성 재조합 th/weight) C(적대적split 신규모델) D(str2q8 조건부/TTA). 순서·사전등록 문턱·선택편향 예산 확정 대기.
