@@ -39,11 +39,15 @@ FGM_ON = os.environ.get("AD_FGM", "0") == "1"
 FOLD_LO = int(os.environ.get("AD_FOLD_LO", "0"))
 FOLD_HI = int(os.environ.get("AD_FOLD_HI", "5"))
 EXCLUDE_AU = os.environ.get("AD_EXCLUDE_AU", "0") == "1"   # sim-only 학습 프로브
+SELECT_SIM = os.environ.get("AD_SELECT_SIM", "0") == "1"   # sim-only 나침반용 epoch 선택
+RDROP_A = float(os.environ.get("AD_RDROP", "0"))   # >0: R-Drop 2-forward 대칭KL (Liang'21). FGM과 가산적(R-AT). 학습 ~1.7배
+EMA_D = float(os.environ.get("AD_EMA", "0"))       # >0(예 0.999): 스텝 EMA 패시브 계측 — 학습역학 불변, npz에 *_ema 병행 저장
 TAG = os.environ.get("AD_TAG", f"{MODEL.split('/')[-1]}_s{SEED}_f{FOLD_LO}{FOLD_HI}")
 HEAD_SEED = 1234
 device = "cuda"; assert torch.cuda.is_available()
 print(f"[teacher] {TAG} model={MODEL} v={VERSION} len={MAX_LEN} ep={EPOCHS} lr={LR} "
-      f"b={BATCH} fp16={FP16} llrd={LLRD} fgm={FGM_ON} folds=[{FOLD_LO},{FOLD_HI})", flush=True)
+      f"b={BATCH} fp16={FP16} llrd={LLRD} fgm={FGM_ON} exclude_au={EXCLUDE_AU} "
+      f"select_sim={SELECT_SIM} rdrop={RDROP_A} ema={EMA_D} folds=[{FOLD_LO},{FOLD_HI})", flush=True)
 
 set_seed(SEED)
 samples, y, ids = load_train()
@@ -131,6 +135,16 @@ def make_opt(model):
 oof = np.zeros((len(samples), NUM_CLASSES), np.float32)
 hold_sum = np.zeros((len(hold_idx), NUM_CLASSES), np.float32)
 scores = []
+oof_ema = np.zeros((len(samples), NUM_CLASSES), np.float32) if EMA_D > 0 else None
+hold_sum_ema = np.zeros((len(hold_idx), NUM_CLASSES), np.float32) if EMA_D > 0 else None
+scores_ema = []
+
+def _ema_extra():
+    """EMA 계측 켜졌을 때만 npz에 *_ema 키 추가 (off면 기존 스키마 그대로)."""
+    if EMA_D <= 0:
+        return {}
+    return {"oof_ema": oof_ema, "hold_ema": hold_sum_ema / max(len(scores_ema), 1),
+            "scores_ema": np.array(scores_ema), "ema_decay": EMA_D}
 t0 = time.time()
 GEN = np.array([s["gen"] for s in samples])
 for fi in range(FOLD_LO, FOLD_HI):
@@ -156,16 +170,32 @@ for fi in range(FOLD_LO, FOLD_HI):
     scaler = GradScaler("cuda", enabled=FP16)
     lossfn = torch.nn.CrossEntropyLoss(weight=torch.tensor(cw, dtype=torch.float, device=device))
     fgm = FGM(model) if FGM_ON else None
+    ema = ({n: p.detach().clone().float() for n, p in model.named_parameters() if p.requires_grad}
+           if EMA_D > 0 else None)
     best, bva, bho = -1, None, None
+    best_e, bva_e, bho_e = -1, None, None
     for ep in range(EPOCHS):
         model.train()
+        cek = [0.0, 0.0, 0]   # RDROP시 CE/KL 성분 추적 (R26 가드: α사고 vs 축기각 구분)
         for enc, lb in dl:
             enc = {k: v.to(device) for k, v in enc.items()}; lb = lb.to(device); opt.zero_grad()
+            def _base_loss():
+                if RDROP_A > 0:   # R-Drop: 드롭아웃 2회 forward + 대칭 KL 일치성
+                    l1 = model(**enc).logits
+                    l2 = model(**enc).logits
+                    ce = 0.5 * (lossfn(l1, lb) + lossfn(l2, lb))
+                    lp1 = torch.log_softmax(l1.float(), 1)
+                    lp2 = torch.log_softmax(l2.float(), 1)
+                    kl = 0.5 * (torch.nn.functional.kl_div(lp2, lp1.exp(), reduction="batchmean")
+                                + torch.nn.functional.kl_div(lp1, lp2.exp(), reduction="batchmean"))
+                    cek[0] += float(ce.detach()); cek[1] += float(kl.detach()); cek[2] += 1
+                    return ce + RDROP_A * kl
+                return lossfn(model(**enc).logits, lb)
             if FP16:
                 with autocast("cuda", dtype=torch.float16):
-                    loss = lossfn(model(**enc).logits, lb)
+                    loss = _base_loss()
             else:
-                loss = lossfn(model(**enc).logits, lb)
+                loss = _base_loss()
             scaler.scale(loss).backward()
             if fgm is not None:
                 fgm.attack()
@@ -177,27 +207,52 @@ for fi in range(FOLD_LO, FOLD_HI):
                 scaler.scale(aloss).backward()
                 fgm.restore()
             scaler.step(opt); scaler.update(); sch.step()
+            if ema is not None:
+                with torch.no_grad():
+                    for n, p in model.named_parameters():
+                        if n in ema:
+                            ema[n].mul_(EMA_D).add_(p.detach().float(), alpha=1 - EMA_D)
         pv = infer_probs(model, va)
         mf1, _ = macro_f1(y[va], pv.argmax(1))
         sim_mask = GEN[np.asarray(va)] == "sim"
         smf1, _ = macro_f1(y[np.asarray(va)[sim_mask]], pv[sim_mask].argmax(1))
         print(f"    epoch {ep+1}: val={mf1:.4f} sim={smf1:.4f} @{(time.time()-t0)/60:.1f}min", flush=True)
-        if mf1 > best:
-            best = mf1; bva = pv; bho = infer_probs(model, hold_idx)
+        if RDROP_A > 0 and cek[2]:
+            print(f"      [rdrop] CE={cek[0]/cek[2]:.4f} KL={cek[1]/cek[2]:.4f} αKL={RDROP_A*cek[1]/cek[2]:.4f}", flush=True)
+        pick = smf1 if SELECT_SIM else mf1
+        if pick > best:
+            best = pick; bva = pv; bho = infer_probs(model, hold_idx)
+        if ema is not None:   # EMA 가중치로도 평가 (패시브 — 학습에 무영향)
+            bak = {n: p.detach().clone() for n, p in model.named_parameters() if n in ema}
+            with torch.no_grad():
+                for n, p in model.named_parameters():
+                    if n in ema: p.data.copy_(ema[n].to(p.dtype))
+            pv_e = infer_probs(model, va)
+            mf1_e, _ = macro_f1(y[va], pv_e.argmax(1))
+            smf1_e, _ = macro_f1(y[np.asarray(va)[sim_mask]], pv_e[sim_mask].argmax(1))
+            print(f"      [ema] val={mf1_e:.4f} sim={smf1_e:.4f}", flush=True)
+            pick_e = smf1_e if SELECT_SIM else mf1_e
+            if pick_e > best_e:
+                best_e = pick_e; bva_e = pv_e; bho_e = infer_probs(model, hold_idx)
+            with torch.no_grad():
+                for n, p in model.named_parameters():
+                    if n in bak: p.data.copy_(bak[n])
     oof[va] = bva; hold_sum += bho; scores.append(best)
+    if ema is not None:
+        oof_ema[va] = bva_e; hold_sum_ema += bho_e; scores_ema.append(best_e)
     del model; torch.cuda.empty_cache()
     # 증분 저장: 세션이 죽어도 완료 fold까지 보존 (fold_hi=현재까지)
     np.savez_compressed(os.path.join(WORK, f"teacher_{TAG}.npz"),
                         oof=oof, hold=hold_sum / max(len(scores), 1),
                         scores=np.array(scores), fold_lo=FOLD_LO, fold_hi=fi + 1,
-                        model=MODEL, version=VERSION, max_len=MAX_LEN)
+                        model=MODEL, version=VERSION, max_len=MAX_LEN, **_ema_extra())
     print(f"    [incremental npz saved: folds {FOLD_LO}..{fi}]", flush=True)
 
 nf = FOLD_HI - FOLD_LO
 np.savez_compressed(os.path.join(WORK, f"teacher_{TAG}.npz"),
                     oof=oof, hold=hold_sum / max(nf, 1),
                     scores=np.array(scores), fold_lo=FOLD_LO, fold_hi=FOLD_HI,
-                    model=MODEL, version=VERSION, max_len=MAX_LEN)
+                    model=MODEL, version=VERSION, max_len=MAX_LEN, **_ema_extra())
 cov = np.concatenate([folds[i][1] for i in range(FOLD_LO, FOLD_HI)])
 pmf1, _ = macro_f1(y[cov], oof[cov].argmax(1))
 print(f"[teacher {TAG}] fold_scores={[round(s,4) for s in scores]} covered-OOF={pmf1:.4f} "

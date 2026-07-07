@@ -41,8 +41,9 @@ TAG = os.environ.get("AD_TAG", "member")
 SOFT = os.environ.get("AD_SOFT", "")            # teacher 소프트라벨 npz(probs [N,14]) → 증류 모드
 SOFT_W = float(os.environ.get("AD_SOFT_W", "0.3"))   # loss = (1-w)*CE(hard) + w*KL(soft, T)
 SOFT_T = float(os.environ.get("AD_SOFT_T", "2.0"))
+FGM_ON = os.environ.get("AD_FGM", "0") == "1"   # 적대적 임베딩 섭동(teacher_cli 이식). fold0 실측 +0.027
 device = "cuda"; assert torch.cuda.is_available()
-print(f"[full] {TAG}: {MODEL} v={VERSION} len={MAX_LEN} ep={EPOCHS} lr={LR} b={BATCH} prune={PRUNE}"
+print(f"[full] {TAG}: {MODEL} v={VERSION} len={MAX_LEN} ep={EPOCHS} lr={LR} b={BATCH} prune={PRUNE} fgm={FGM_ON}"
       + (f" distill(w={SOFT_W},T={SOFT_T})" if SOFT else ""), flush=True)
 
 set_seed(SEED)
@@ -99,6 +100,25 @@ class DS(torch.utils.data.Dataset):
 def coll(b):
     return pad_batch(b), torch.tensor([y[j] for j in b]), torch.tensor(b)
 
+
+class FGM:
+    """적대적 임베딩 섭동 (teacher_cli와 동일 구현) — word_embeddings 그래디언트 방향 섭동."""
+    def __init__(self, model, eps=1.0):
+        self.model, self.eps, self.backup = model, eps, {}
+    def attack(self, emb_name="word_embeddings"):
+        for n, p in self.model.named_parameters():
+            if p.requires_grad and emb_name in n and p.grad is not None:
+                self.backup[n] = p.data.clone()
+                norm = torch.norm(p.grad)
+                if norm and not torch.isnan(norm):
+                    p.data.add_(self.eps * p.grad / norm)
+    def restore(self):
+        for n, p in self.model.named_parameters():
+            if n in self.backup:
+                p.data = self.backup[n]
+        self.backup = {}
+
+
 opt = make_opt(model)
 dl = torch.utils.data.DataLoader(DS(), batch_size=BATCH, shuffle=True, collate_fn=coll,
                                  num_workers=4, pin_memory=True, persistent_workers=True)
@@ -108,6 +128,7 @@ scaler = GradScaler("cuda")
 lossfn = torch.nn.CrossEntropyLoss(weight=torch.tensor(cw, dtype=torch.float, device=device))
 SWA_K = int(os.environ.get("AD_SWA_K", "0"))   # 마지막 K에폭 가중치 평균(SWA-lite, codex R10)
 swa_sum, swa_n = None, 0
+fgm = FGM(model) if FGM_ON else None
 t0 = time.time()
 for ep in range(EPOCHS):
     model.train()
@@ -122,7 +143,14 @@ for ep in range(EPOCHS):
                 tp_t = torch.softmax(torch.log(tp + 1e-9) / SOFT_T, dim=1)   # T-스케일 teacher
                 kl = torch.nn.functional.kl_div(logq, tp_t, reduction="batchmean") * (SOFT_T ** 2)
                 loss = (1 - SOFT_W) * loss + SOFT_W * kl
-        scaler.scale(loss).backward(); scaler.step(opt); scaler.update(); sch.step()
+        scaler.scale(loss).backward()
+        if fgm is not None:
+            fgm.attack()
+            with autocast("cuda", dtype=torch.float16):
+                aloss = lossfn(model(**enc).logits, lb)
+            scaler.scale(aloss).backward()
+            fgm.restore()
+        scaler.step(opt); scaler.update(); sch.step()
     print(f"  epoch {ep+1} done @{(time.time()-t0)/60:.1f}min", flush=True)
     if SWA_K and ep >= EPOCHS - SWA_K:
         sd = {k: v.detach().float().cpu() for k, v in model.state_dict().items()
