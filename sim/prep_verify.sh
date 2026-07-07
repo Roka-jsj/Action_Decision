@@ -75,4 +75,4 @@ fi
 SH
 chmod +x "$W/run.sh"
 echo "[prep] 완료. 호스트 터미널에서 실행:"
-echo "  docker exec -it mun-jtest bash /share/verify/$NAME/run.sh"
+echo "  docker exec -it mun-test bash /share/verify/$NAME/run.sh"

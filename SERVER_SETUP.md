@@ -117,7 +117,7 @@ python3 /workspace/sim/package_single.py --out submit_largeonly \
   --member /workspace/action_decision_maximum/experiments/member_largefullv6.zip::v6 \
   --bias "/workspace/action_decision_maximum/experiments/teacher_largev6[AB]_a*.npz"
 bash /workspace/sim/prep_verify.sh /workspace/packages/submit_largeonly.zip
-docker exec mun-jtest bash /share/verify/submit_largeonly/run.sh    # → 측정 T1
+docker exec mun-test bash /share/verify/submit_largeonly/run.sh    # → 측정 T1
 # ratio = 257 / T1  (예: T1=80초면 3.21)
 echo '{"ratio": 3.21}' > /workspace/sim/calib.json    # 이후 모든 검증에 자동 동봉
 ```

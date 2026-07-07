@@ -9,7 +9,7 @@
 #       ③/share에 자가완결 검증셋 조립 ④docker exec로 검증컨테이너 실행(오프라인 30k)
 #       ⑤시간·VRAM 게이트 + holdout 점수 출력 → /workspace/work/verify_<TAG>.txt
 set -e
-TAG=$1; SEED=$2; EP=${3:-8}; VER=${4:-v6}; TC=${5:-mun-jtest}
+TAG=$1; SEED=$2; EP=${3:-8}; VER=${4:-v6}; TC=${5:-mun-test}
 [ -n "$TAG" ] && [ -n "$SEED" ] || { echo "usage: $0 <TAG> <SEED> [EPOCHS] [VERSION] [TEST_CT]"; exit 1; }
 R=/workspace
 E=$R/action_decision_maximum/experiments
