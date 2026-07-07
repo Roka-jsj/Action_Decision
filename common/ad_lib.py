@@ -105,6 +105,60 @@ def arg_path_or_pattern(name, args):
     return ""
 
 
+# ===== v9 rich 직렬화용 canonical 추출 (R21: full path/result 신호 복원, portable) =====
+_DIR_ROLES = [
+    ("test", re.compile(r'(^|/)(tests?|spec|specs|__tests__|e2e|fixtures?)(/|$)', re.I)),
+    ("config", re.compile(r'(^|/)(config|configs|conf|settings|\.github|ci|deploy)(/|$)|\.(ya?ml|toml|ini|cfg|env|lock)$', re.I)),
+    ("docs", re.compile(r'(^|/)(docs?)(/|$)|readme|\.(md|rst)$', re.I)),
+    ("src", re.compile(r'(^|/)(src|lib|libs|app|apps|pkg|packages|internal|cmd|core|components?|services?|api|utils?|models?)(/|$)', re.I)),
+]
+
+
+def _dir_role(path):
+    for role, rx in _DIR_ROLES:
+        if rx.search(path):
+            return role
+    return "root" if "/" not in path.strip("/") else "dir"
+
+
+def _canon_arg(name, args):
+    """경로/패턴을 portable canonical로: basename + dir역할 + depth + ext (원 숫자/id 제거)."""
+    a = arg_path_or_pattern(name, args)
+    if not a:
+        return ""
+    a = a.strip()
+    if ("*" in a or "?" in a or name in ("grep_search", "glob_pattern")) and "/" not in a[:3]:
+        return re.sub(r"\d+", "#", a[:40])          # 패턴/심볼 원문 보존(숫자만 정규화)
+    base = a.rstrip("/").split("/")[-1] or a
+    depth = a.strip("/").count("/")
+    ext = path_ext(a)
+    base = re.sub(r"\d{2,}", "#", base)[:28]        # 긴 숫자/버전 정규화
+    return f"{base}|{_dir_role(a)}|d{depth}" + (f"|{ext}" if ext else "")
+
+
+def _canon_result(name, summary):
+    """result_summary에서 결정신호 핵심 토큰만: 개수/줄수/무매치/트레이스/테스트."""
+    s = (summary or "").strip().lower()
+    if not s:
+        return ""
+    toks = []
+    m = re.search(r"(\d+)\s*(match|matches|file|files|result|results|occurrence|occurrences|entr|item)", s)
+    if m:
+        toks.append(f"n{m.group(1)}")
+    m = re.search(r"\((\d+)\s*l", s)
+    if m:
+        toks.append(f"L{m.group(1)}")
+    if "no match" in s or re.search(r"\b0\s+match", s) or s.startswith("no ") or "empty" in s:
+        toks.append("empty")
+    if "traceback" in s or "exception" in s or "stack trace" in s:
+        toks.append("trace")
+    if re.search(r"\bfail", s):
+        toks.append("fail")
+    elif "pass" in s or "ok;" in s or s.startswith("ok"):
+        toks.append("ok")
+    return " ".join(dict.fromkeys(toks))[:40]
+
+
 def meta_fields(sample):
     sm = sample.get("session_meta") or {}
     ws = sm.get("workspace") or {}
@@ -156,10 +210,22 @@ def _pace_bin(elapsed, turn):
     return "p5"
 
 
-def _fmt_action(t, with_args=False, full_args=False):
+def _fmt_action(t, with_args=False, full_args=False, rich=False):
     nm = t.get("name", "")
     rs = (t.get("result_summary") or "")[:100]
     st = result_status(nm, rs)
+    if rich:
+        # v9: v6의 (ext,status,result[:100])를 그대로 유지 + 경로구조(role/depth/basename) 추가 = 순수 상위집합(R21)
+        raw = arg_path_or_pattern(nm, t.get("args") or {}).strip()
+        if raw:
+            if "*" in raw or "?" in raw or nm in ("grep_search", "glob_pattern"):
+                a = re.sub(r"\d+", "#", raw[:40])                       # 패턴/심볼 원문
+            else:
+                base = re.sub(r"\d{2,}", "#", raw.rstrip("/").split("/")[-1] or raw)[:28]
+                a = f"{path_ext(raw) or '-'}|{_dir_role(raw)}|d{raw.strip('/').count('/')}|{base}"
+        else:
+            a = ""
+        return f"{nm}({a})[{st}] {rs}" if a else f"{nm}[{st}] {rs}"
     if full_args:
         # v5: 인자 원문(경로/패턴/명령 등) 보존 — 하드클래스(read/grep/glob/list) 구분 신호
         a = arg_path_or_pattern(nm, t.get("args") or {})[:80]
@@ -205,8 +271,8 @@ def serialize(sample, version="v3", max_hist_turns=8):
             la = f" [LAST] {nm}{('('+ext+')') if ext else ''} [{st}] {rs[:100]}"
         return f"[CUR] {prompt}{la}"
     m = meta_fields(sample)
-    _metaver = ("v4", "v5", "v6", "v7", "v6n", "v8")
-    _seqver = ("v6", "v7", "v6n", "v8")
+    _metaver = ("v4", "v5", "v6", "v7", "v6n", "v8", "v9")
+    _seqver = ("v6", "v7", "v6n", "v8", "v9")
     hdr = (f"[TIER] {m['user_tier']} [LANG] {m['language_pref']} [TURN] {_turn_bin(m['turn_index'])} "
            f"[CI] {m['last_ci_status']} [GIT] {'dirty' if m['git_dirty'] else 'clean'}")
     gen_blk = None
@@ -232,7 +298,7 @@ def serialize(sample, version="v3", max_hist_turns=8):
             if t.get("role") == "user":
                 hist_parts.append(f"u: {(t.get('content') or '')[:150]}")
             elif t.get("role") == "assistant_action":
-                hist_parts.append(f"a: {_fmt_action(t, with_args=(version in ('v4', 'v6', 'v7', 'v6n', 'v8')), full_args=(version == 'v5'))}")
+                hist_parts.append(f"a: {_fmt_action(t, with_args=(version in ('v4', 'v6', 'v7', 'v6n', 'v8')), full_args=(version == 'v5'), rich=(version == 'v9'))}")
     seq_parts = []
     if version in _seqver:
         seq = [t.get("name", "") for t in full_hist if t.get("role") == "assistant_action"]
@@ -264,7 +330,8 @@ def serialize(sample, version="v3", max_hist_turns=8):
     parts += seq_parts
     if pflag:
         parts.append(pflag)
-    if version == "v7":
+    if version in ("v7", "v9"):
+        # v9: elapsed 세션단계 prior (R9서 탐색분포 단조신호 확인, OOF-kill은 오판 가능 — R21 재검토)
         parts.append(f"[PACE] {_elapsed_bin(m['elapsed'])} {_pace_bin(m['elapsed'], m['turn_index'])}")
     parts.append(f"[CUR] {prompt}")
     return " ".join(parts)

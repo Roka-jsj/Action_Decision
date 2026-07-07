@@ -180,3 +180,13 @@
 ## R20 — "모든 전략" 캠페인 (07-07, 사용자 지시) 진행중
 - 14개 상수클래스 프로브 zip 생성(prior 역산: n_c=30000·14M/(2-14M)). prior_from_probe.py + labelshift_bias.py(자기검증 통과, test=train시 0.7501 수렴) 준비완료.
 - codex에 캠페인 잠금 요청: A(prior프로브+label-shift) B(LB양성 재조합 th/weight) C(적대적split 신규모델) D(str2q8 조건부/TTA). 순서·사전등록 문턱·선택편향 예산 확정 대기.
+- **R20 codex 답(천장전제)**: A1 13발 prior프로브(정보용) → A2 label-shift(L1≥0.04 또는 class shift≥0.8pp AND reweighted OOF≥+0.0013일때만 1발) → B1 th0.6 1발 → B2 조건부. bank교체 문턱 0.7871(best-of-K=3 선택편향 +0.0044 보정). **단 이 캠페인은 천장전제라 아래 R21에서 폐기.**
+
+## ⚡R21 — 천장 반증! 0.80+ 팀 실존 → 전면 재설계 (07-07)
+- **사용자 확정 외부사실: LB 0.79+ 20팀, 0.80+ 존재.** "0.78266 천장"(R17~R20) 완전 반증. +0.018 격차 = post-hoc 불가, 구조적 누락.
+- **데이터 재발견: 64% 한국어**(ko45k/en18k/mixed7k, 현재발화 71% 한글). BUT klue<xlm-r였으므로 실신호=한국어의미 아닌 **tool trajectory·path/result·혼합기술어**.
+- **codex Q1 확률배분**: (b)버린 rich feature[full path/result/elapsed] **35%** / (d)구조·retrieval·약누출 28% / (c)이종앙상블 15% / (e)문제재정의 14% / (a)강한 base모델 **8%**(klue약세가 강력 제약). **1순위=모델교체 아닌 표현 재설계.**
+- **내 Q4 진단(정합)**: 탐색클러스터(41% 병목)의 **36.1%가 경로/패턴을 history args에만** 보유 — 우리는 ext만 씀. 45.3%는 [CUR]에 있음(모델이 봄), 17.7%만 진짜 무신호.
+- **codex LB정책 개정**: naive OOF 폐기. **portable/인과 feature면 fold 애매해도 LB canary 1발**. fold>+0.010이면 canary. v8류 배치/shortcut은 1회실패 후 폐기. 검증재설계=session/template/language/action-family split.
+- **8일계획(codex)**: D2 rich직렬화(v9) → D3 ablation LB → D4 retrieval/구조 prior → D5 모델다양성(mdeberta rich) → D6 문제재정의(action-family head/transition prior) → D7 distill → D8 수렴. 산식 rich+0.006~12 / retrieval+0.004~10 / 앙상블+0.003~6.
+- **실행 개시: v9 rich직렬화 구현·발사.** v9 = v6 순수상위집합(경로 role/depth/basename + result[:100] 유지 + [PACE] elapsed). v6 바이트동일(0/30). read_file(tsx|src|d1|Button.tsx)[success] ok;258 lines 식. portable 인과신호(v8 위치shortcut과 구분). 함대체인(fold0게이트 0.736 → folds1-4 → FULL → 패키징 → 검증) 발사.
