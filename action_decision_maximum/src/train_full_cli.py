@@ -56,6 +56,43 @@ if SIMONLY:
     y = y[_keep]
     ids = [ids[i] for i in _keep]
     print(f"[simonly] au 제외 학습: {len(ids)}행", flush=True)
+# history-dropout 증강 (R24, 히든 history분포 shift 직격 정규화). AD_AUG=histdrop, AD_AUG_RATIO(0.5).
+AUG = os.environ.get("AD_AUG", "")
+if AUG == "histdrop":
+    import random as _rnd
+    _r = _rnd.Random(SEED)
+    ratio = float(os.environ.get("AD_AUG_RATIO", "0.5"))
+    n_aug = int(len(samples) * ratio)
+    aug_s, aug_y = [], []
+    picks = _r.sample(range(len(samples)), n_aug)
+    for i in picks:
+        s = samples[i]; h = s.get("history") or []
+        if not h:
+            continue
+        u = _r.random()
+        if u < 0.20:                       # 전체 history 제거
+            nh = []
+        elif u < 0.50:                     # 최근 1-2 step만 (turn 2-4개)
+            nh = h[-_r.choice([2, 3, 4]):]
+        else:                              # 랜덤 prefix 길이 유지 (뒤쪽 절단)
+            k = _r.randint(1, max(1, len(h) - 1))
+            nh = h[-k:]
+        sa = dict(s); sa["history"] = nh
+        # field dropout: result_summary 12%, args 10% (액션명 보존)
+        if nh:
+            nh2 = []
+            for t in nh:
+                if t.get("role") == "assistant_action":
+                    t = dict(t)
+                    if _r.random() < 0.12: t["result_summary"] = ""
+                    if _r.random() < 0.10: t["args"] = {}
+                nh2.append(t)
+            sa["history"] = nh2
+        aug_s.append(sa); aug_y.append(y[i])
+    samples = list(samples) + aug_s
+    y = np.concatenate([y, np.array(aug_y, dtype=y.dtype)])
+    print(f"[aug:histdrop] +{len(aug_s)}행 증강 → 총 {len(samples)}행 (ratio={ratio})", flush=True)
+
 tok = AutoTokenizer.from_pretrained(MODEL); tok.truncation_side = "left"
 texts = [ad_lib.serialize(s, VERSION) for s in samples]
 enc_all = tok(texts, truncation=True, max_length=MAX_LEN, padding=False)
