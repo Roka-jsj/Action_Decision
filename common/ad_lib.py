@@ -425,7 +425,7 @@ def _load_model_maybe_quant(model_dir):
 
 
 def predict_logits(model_dir, samples, version="v3", max_len=192, batch_size=64,
-                   device=None, max_hist_turns=8, texts=None, return_probs=False):
+                   device=None, max_hist_turns=8, texts=None, return_probs=False, return_emb=False):
     """samples(list[dict]) → logits/probs(np.ndarray [N,14]). 길이정렬 배칭 + fp16(GPU).
 
     - model_dir/id_map.npy 존재 시 vocab-pruned 모델로 간주, 토큰 id 리매핑.
@@ -456,6 +456,7 @@ def predict_logits(model_dir, samples, version="v3", max_len=192, batch_size=64,
         texts = [serialize(s, version, max_hist_turns) for s in samples]
     order = sorted(range(len(texts)), key=lambda i: len(texts[i]))
     logits = np.zeros((len(texts), NUM_CLASSES), dtype=np.float32)
+    emb = np.zeros((len(texts), model.config.hidden_size), dtype=np.float32) if return_emb else None
     with torch.no_grad():
         for b in range(0, len(order), batch_size):
             idx = order[b:b + batch_size]
@@ -465,7 +466,17 @@ def predict_logits(model_dir, samples, version="v3", max_len=192, batch_size=64,
                 enc["input_ids"] = torch.from_numpy(
                     id_map[enc["input_ids"].numpy()]).to(enc["input_ids"].dtype)
             enc = enc.to(device)
-            out = model(**enc).logits.float()
+            if return_emb:
+                # base encoder 1회 → last_hidden에서 logits(classifier)와 mean-pool emb 동시 추출.
+                # (output_hidden_states=True는 전 레이어 materialize로 T4 OOM 위험 → 회피)
+                lh = model.base_model(**enc).last_hidden_state           # [B,T,H]
+                out = model.classifier(lh).float()
+                mask = enc["attention_mask"].unsqueeze(-1).float()
+                mp = ((lh * mask).sum(1) / mask.sum(1).clamp(min=1)).float().cpu().numpy()
+                for j, i in enumerate(idx):
+                    emb[i] = mp[j]
+            else:
+                out = model(**enc).logits.float()
             if return_probs:
                 out = torch.softmax(out, dim=1)
             out = out.cpu().numpy()
@@ -474,7 +485,7 @@ def predict_logits(model_dir, samples, version="v3", max_len=192, batch_size=64,
     del model
     if device == "cuda":
         torch.cuda.empty_cache()
-    return logits
+    return (logits, emb) if return_emb else logits
 
 
 def predict_ensemble_probs(model_root, samples, meta, device=None, return_members=False):
@@ -556,6 +567,69 @@ def predict_conditional_probs(model_root, samples, meta, device=None):
             acc = acc + w[mi] * run(mi, sub, tcache)
             wt += w[mi]
         out[sel] = acc / wt
+    return out
+
+
+def _retrieval_adjust(scores, emb, model_dir, cfg):
+    """near-dup prior 보정 (R22/R23). model_dir/retrieval/ 번들 사용.
+
+    train_emb.npy(중심화·정규화 fp16 [Ntr,H]), train_labels.npy, emb_mean.npy.
+    cfg: {lambda, margin_th, purity_th, k, sim_th(옵션)}. gated logit 보정.
+    """
+    import numpy as np
+    rdir = os.path.join(model_dir, "retrieval")
+    tr = np.load(os.path.join(rdir, "train_emb.npy")).astype(np.float32)   # [Ntr,H] 중심화·정규화됨
+    tl = np.load(os.path.join(rdir, "train_labels.npy"))
+    mu = np.load(os.path.join(rdir, "emb_mean.npy")).astype(np.float32)
+    lam = float(cfg.get("lambda", 0.3)); mth = float(cfg.get("margin_th", 0.30))
+    pth = float(cfg.get("purity_th", 0.70)); K = int(cfg.get("k", 8))
+    sth = float(cfg.get("sim_th", -1.0)); gcap = float(cfg.get("gate_cap", 0.12))
+    ho_med = float(cfg.get("holdout_top1_median", 0.0))
+    q = emb.astype(np.float32) - mu
+    q /= (np.linalg.norm(q, axis=1, keepdims=True) + 1e-9)
+    probs = np.exp(scores - scores.max(1, keepdims=True)); probs /= probs.sum(1, keepdims=True)
+    srt = np.sort(probs, axis=1); mgn = srt[:, -1] - srt[:, -2]
+    logpc = np.log(probs.mean(0) + 1e-9)
+    out = scores.copy()
+    try:
+        import torch
+        dev = "cuda" if torch.cuda.is_available() else "cpu"
+        Tt = torch.from_numpy(tr).to(dev)
+        top1_all = np.zeros(len(q), np.float32)
+        prs = {}                                            # gi -> prior (통과행만)
+        for b in range(0, len(q), 2048):
+            qb = torch.from_numpy(q[b:b + 2048]).to(dev)
+            tsim, tidx = torch.topk(qb @ Tt.T, K, dim=1)
+            tsim = tsim.cpu().numpy(); tidx = tidx.cpu().numpy()
+            for r in range(qb.shape[0]):
+                gi = b + r; top1_all[gi] = tsim[r][0]
+                if mgn[gi] >= mth:
+                    continue
+                lbl = tl[tidx[r]]
+                if np.bincount(lbl[:8], minlength=NUM_CLASSES).max() / 8.0 < pth:
+                    continue
+                if sth > 0 and tsim[r][0] < sth:
+                    continue
+                w = np.clip(tsim[r], 0, None) ** 4
+                pr = np.bincount(lbl, weights=w, minlength=NUM_CLASSES).astype(np.float64)
+                prs[gi] = pr / (pr.sum() + 1e-9)
+        # ---- OOD guard (R23): 게이트율 상한 + 테스트 유사도 분포 shift 감지 ----
+        rate = len(prs) / max(len(q), 1)
+        test_med = float(np.median(top1_all))
+        eff_lam = lam
+        if ho_med > 0 and test_med < ho_med - 0.03:
+            eff_lam = min(eff_lam, 0.15)
+            print(f"[retrieval] OOD: test top1 med {test_med:.3f} << holdout {ho_med:.3f} → λ={eff_lam}", flush=True)
+        if rate > gcap:
+            eff_lam = 0.0
+            print(f"[retrieval] 게이트율 {rate*100:.1f}%>{gcap*100:.0f}% → 비활성(안전)", flush=True)
+        print(f"[retrieval] 게이트율 {rate*100:.2f}% test-top1-med {test_med:.3f} λ={eff_lam}", flush=True)
+        if eff_lam > 0:
+            for gi, pr in prs.items():
+                out[gi] = out[gi] + eff_lam * (np.log(pr + 1e-9) - logpc)
+    except Exception as e:
+        print(f"[retrieval] skip (오류 폴백): {e}", flush=True)
+        return scores
     return out
 
 
@@ -665,6 +739,12 @@ def predict(model_dir, samples, version="v3", max_len=192, batch_size=64,
         else:
             probs = mean_p
         scores = np.log(probs + 1e-9)
+    elif meta and meta.get("retrieval"):
+        # 단일모델 로짓 + mean-pool 임베딩 1-forward → near-dup prior 보정 (R22 X1)
+        raw, emb = predict_logits(model_dir, work, version, max_len, batch_size, device,
+                                  max_hist_turns, return_emb=True)
+        scores = _to_logprobs_np(raw, np)
+        scores = _retrieval_adjust(scores, emb, model_dir, meta["retrieval"])
     else:
         scores = predict_logits(model_dir, work, version, max_len, batch_size, device, max_hist_turns)
         scores = _to_logprobs_np(scores, np)

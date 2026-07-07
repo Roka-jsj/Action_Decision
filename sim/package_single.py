@@ -19,6 +19,8 @@ ap.add_argument("--dual_shrink", type=float, default=1.0)  # bias_au/sim ← λ*
 ap.add_argument("--version", default="v6")
 ap.add_argument("--max_len", type=int, default=320)
 ap.add_argument("--batch", type=int, default=128)
+ap.add_argument("--retrieval", default="")       # retrieval pack 디렉터리(train_emb/labels/mean)
+ap.add_argument("--retrieval_cfg", default="")    # retrieval config json
 a = ap.parse_args()
 
 pkg = os.path.join(ROOT, "packages", a.out); shutil.rmtree(pkg, ignore_errors=True)
@@ -41,6 +43,13 @@ compile(adl, "ad_lib.py", "exec")
 open(os.path.join(mdl, "ad_lib.py"), "w", encoding="utf-8").write(adl)
 
 rm = {"version": mver or a.version, "max_len": a.max_len, "batch_size": a.batch}
+if a.retrieval:
+    import shutil as _sh
+    rdst = os.path.join(mdl, "retrieval"); os.makedirs(rdst, exist_ok=True)
+    for f in ("train_emb.npy", "train_labels.npy", "emb_mean.npy"):
+        _sh.copy(os.path.join(a.retrieval, f), os.path.join(rdst, f))
+    rm["retrieval"] = json.load(open(a.retrieval_cfg)) if a.retrieval_cfg else {}
+    print(f"[retrieval] pack 동봉 + cfg={rm['retrieval']}")
 # bias 적합 (largev6 OOF로)
 if a.bias:
     from common.io_utils import load_train, CLASSES
