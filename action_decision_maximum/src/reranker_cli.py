@@ -30,6 +30,7 @@ BATCH = int(os.environ.get("AD_BATCH", "64"))
 SEED = int(os.environ.get("AD_SEED", "1234"))
 TAG = os.environ.get("AD_TAG", "cc_reranker_a_f0")
 WORK = os.environ.get("AD_WORK", "/workspace/work")
+FULL = os.environ.get("AD_FULL", "0") == "1"   # 1: 전 E4행 학습(배포용) — 고정 에폭·최종가중치 저장·프루닝
 E4 = ["read_file", "grep_search", "list_directory", "glob_pattern"]
 E4_IDX = [CLASSES.index(c) for c in E4]
 device = "cuda"; assert torch.cuda.is_available()
@@ -43,7 +44,10 @@ sp = make_splits(ids, y, groups)
 tr_all, va = sp["folds"][0]
 tr_all, va = np.asarray(tr_all), np.asarray(va)
 in_e4 = np.isin(y, E4_IDX)
-tr = tr_all[in_e4[tr_all]]                       # fold0-train ∩ E4 라벨
+if FULL:
+    tr = np.where(in_e4)[0]                      # 배포용: 전 E4행(70k 중 28.8k)
+else:
+    tr = tr_all[in_e4[tr_all]]                   # fold0-train ∩ E4 라벨
 y4 = np.full(len(samples), -1, np.int64)
 for j, c in enumerate(E4_IDX):
     y4[y == c] = j
@@ -111,11 +115,23 @@ for ep in range(EPOCHS):
     mf, _ = macro_f1(y4[va_e4_sim], pv.argmax(1), n_classes=4)
     scores.append(mf)
     print(f"    epoch {ep+1}: e4sim_macro4={mf:.4f} @{(time.time()-t0)/60:.1f}min", flush=True)
-    if mf > best:
+    if not FULL and mf > best:
         best = mf
         bp = infer4(va)          # best epoch에서 val 전행 확률 저장
-np.savez_compressed(os.path.join(WORK, f"reranker_{TAG}.npz"),
-                    probs4=bp, val_idx=va, e4_classes=np.array(E4_IDX),
-                    scores=np.array(scores), model=MODEL, version=VERSION)
+if FULL:
+    # 배포용: 최종 가중치 저장 → 프루닝 → work/rr_<TAG>/
+    import shutil
+    from common.vocab_prune import prune_model_dir
+    raw = os.path.join(WORK, f"rr_raw_{TAG}"); out = os.path.join(WORK, f"rr_{TAG}")
+    shutil.rmtree(raw, ignore_errors=True); shutil.rmtree(out, ignore_errors=True)
+    model.half().save_pretrained(raw); tok.save_pretrained(raw)
+    K, _ = prune_model_dir(raw, out, tok, texts, max_len=MAX_LEN)
+    shutil.rmtree(raw, ignore_errors=True)
+    sz = sum(os.path.getsize(os.path.join(dp, f)) for dp, _, fs in os.walk(out) for f in fs)
+    print(f"[full-rr] pruned vocab={K}  dir={out}  size={sz/1e6:.0f}MB", flush=True)
+else:
+    np.savez_compressed(os.path.join(WORK, f"reranker_{TAG}.npz"),
+                        probs4=bp, val_idx=va, e4_classes=np.array(E4_IDX),
+                        scores=np.array(scores), model=MODEL, version=VERSION)
 print(f"[reranker {TAG}] best_macro4={best:.4f}  saved", flush=True)
 print("=== DONE ===", flush=True)
