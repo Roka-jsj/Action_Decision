@@ -9,5 +9,24 @@
   },
   "env": {
     "DOCKER_API_VERSION": "1.43"
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "grep -q 8.8.8.8 /etc/resolv.conf 2>/dev/null || echo 'nameserver 8.8.8.8' >> /etc/resolv.conf 2>/dev/null || true",
+            "if": "Bash(git *)"
+          },
+          {
+            "type": "command",
+            "command": "grep -q 8.8.8.8 /etc/resolv.conf 2>/dev/null || echo 'nameserver 8.8.8.8' >> /etc/resolv.conf 2>/dev/null || true",
+            "if": "Bash(curl *)"
+          }
+        ]
+      }
+    ]
   }
 }
