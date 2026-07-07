@@ -19,6 +19,12 @@ for z in ["open.zip", "ad_common.zip"]:
 sys.path.insert(0, WORK)
 
 import numpy as np, torch
+# 외부 GPU 침입 대응(07-08): 시작 즉시 VRAM 선점 예약 — 캐싱 할당자에 보존되어 이후 학습이 그 안에서 돎
+_PRE = float(os.environ.get("AD_PREALLOC_GB", "0"))
+if _PRE > 0 and torch.cuda.is_available():
+    _t = torch.empty(int(_PRE * 1e9 // 2), dtype=torch.float16, device="cuda")
+    del _t
+    print(f"[prealloc] {_PRE}GB 예약 완료", flush=True)
 from common.io_utils import load_train, CLASSES, NUM_CLASSES, set_seed
 from common.cv import make_splits
 from common.metrics import macro_f1
