@@ -177,6 +177,17 @@
 - **신뢰 3원천**: ①LB양성 구성요소 소재조합 ②LB프로브 prior→OOF confusion 재가중 bias보정 ③적대적split(GEN/template/source leave-out) 생존. **은행 0.78266=검증된 천장**(임시 아님). 방어가 기본.
 - 히든-대표 오프라인 oracle은 원천불가(공개5건으론 고차 조건부분포 못봄). 가능한 건 v8류 사전차단 **failure filter**뿐.
 
+## R22~R24 — 팀조율 + retrieval축 + 증강 (07-07, jeong 브랜치)
+- **팀상황**: 조원(별도 Claude) tri_v4new **0.78449=14위(컷 top12 밖)**. tri_cond m3를 v4-s777로 교체(다양성법칙). 리더보드 +0.001/일 인플레. **0.80+ 팀 실존=미발견 +0.018 축.** 같은계정·쿼터공유(제출 다 함). 조원 커버=시드/base-m2/mdeberta. 내 직교축 분담.
+- **R22 codex**: 내 축=**X1 retrieval/near-dup prior 1순위**(최대직교·EV). 역할=조원 tri위 조건부 correction layer(또다른 앙상블러 아님).
+- **retrieval 진단 GO**: large-v6 frozen mean-pool(이방성→중심화). **순환성 통과: 모델오답 27% KNN회복(랜덤7%)=직교신호 실재.** holdout 블렌드 +0.0233.
+- **R23 codex**: 히든전이 감산 기대 +0.006~15. 보수 canary(λ0.3 margin<0.3 purity≥0.7 sim_th0.89 게이트5.7% OOD guard) largeonly위. 배포=ad_lib return_emb(base_model+classifier 1forward, T4안전)+_retrieval_adjust(train_emb 144MB동봉).
+- **retrieval canary LB 0.78096 = +0.00045**: 히든 전이 **양성(음수아님)** but 약함(전이율~6%). **holdout +0.023 vs 히든 +0.0005 = 우리 holdout이 히든 미대표 확증**(v8/v9/retrieval 동일패턴).
+- **v9(rich) 완전사망**: LB 0.76903(-0.011), @384 fold0 0.7317(-0.0074, 예산가설 기각). rich경로신호는 large에 무용(v6서 이미 추출). codex R21 rich35% 가설 large엔 사망.
+- **R24 codex — +0.018 정체 베팅: 구조 > backbone > 착시.** holdout≠히든 확증. 0.80팀은 "더 잘 외우기"아닌 **히든불변 구조**(test-time intra-session 일관성·action transition·history길이불변 표현) or input construction. metric 착시(public/private) 체크 권고.
+- **★history-dropout 증강=내 GPU 1순위(codex)**: 히든 history분포 shift 직격 정규화(라벨오염 아님). drop전체20%/최근1-2 30%/랜덤prefix30%/원본20% + field dropout. hist=0오류43.9% 타격. gate=short-history slice·LB canary. **FULL-8ep 학습중.** 사용자 증강제안=유효(정규화형).
+- 제출후보: submit_retr_v6_mid(retrieval 공격 λ0.45 게이트18%), submit_histdrop(학습후).
+
 ## R20 — "모든 전략" 캠페인 (07-07, 사용자 지시) 진행중
 - 14개 상수클래스 프로브 zip 생성(prior 역산: n_c=30000·14M/(2-14M)). prior_from_probe.py + labelshift_bias.py(자기검증 통과, test=train시 0.7501 수렴) 준비완료.
 - codex에 캠페인 잠금 요청: A(prior프로브+label-shift) B(LB양성 재조합 th/weight) C(적대적split 신규모델) D(str2q8 조건부/TTA). 순서·사전등록 문턱·선택편향 예산 확정 대기.
