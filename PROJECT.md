@@ -267,6 +267,41 @@
 - **신 하네스 규율**: anon 모드(id 익명화)로 World A 재현 가능 / 검증셋 id 원본보존(prefix 경로 실전동일) / calib 2.62 / holdout 절대치는 FULL 암기팽창 — 동일계열 delta·fold0 정직치·LB만 신뢰.
 - **도구**: eda/au_detector.py, eda/dual_lambda_sweep.py, eda/simbias_probe.py, package_single/ensemble --dual, train_full_cli AD_SIMONLY, sim/gen_soft_labels_3way.py. 전부 jeong 브랜치.
 
+## 5.23 재개 스냅샷 (07-08, GPU NVML다운→docker restart 후) ⚡최우선 읽기
+**브랜치 = jeong (main 아님). 목표 재설정: 0.80(1~2%) 추격 접고 → top12 컷 방어.**
+
+### 팀 현황 (같은 계정·쿼터공유, 조원=별도 Claude on mun-train/GPU1)
+- **팀 최고 = 조원 tri_v4new 0.78449 (현 14위, 컷=top12 밖).** tri_cond의 m3(저마진25% 조건부)를 v4-s777 large로 교체(다양성법칙). 조원 dev/cx 브랜치에 상세.
+- **내(jeong) 최고 = retr_v6 보수 0.78096** (largeonly 0.78051 +0.00045, 내 유일 LB양성). 내 tri_cond=0.78266.
+- 0.79+ 20팀·0.80+ 존재(사용자 확인). +0.0155 격차 = 증분 불가.
+
+### 핵심 진단 (이번 세션 최대 성과)
+- **히든 테스트 = train에 OOD 확정**: 홀드아웃→train near-dup retrieval +0.0233 vs 히든→train +0.0005 (46배차). **모든 train기반 실험이 히든서 반전하는 근본원인.** LB만이 진실(holdout·fold-OOF 방향성 없음).
+- FULL-8ep가 fold-6ep보다 +0.041(비정상 큼) — 히든이 train-OOF보다 쉬울 가능성(미해결).
+
+### 사망 확정 (재시도 금지)
+no-GEN(-0.047) / v9 rich(-0.011) / histdrop 증강(-0.011, 오염) / v8 [GEN]꼬리(-0.0023) / retr_mid(게이트18%, -0.0004) / soup(V자) / sim-only / dual-bias / klue·ngram·reranker(조원) / 메타v7 / SWA3(조원은 SWA2 사용).
+
+### 살아있는 축 (codex R26 우선순위)
+1. **tri_v4new 앵커 고정** (0.78449, 최종 기준점, 버리는 실험 금지).
+2. **retrieval→tri 보수 이식** (+0.0002~0.0008): 조원 tri logits/prob 필요(멤버zip 접근불가라 조원 협조). gated coverage 1~5%, alpha 0.05/0.10/0.15, high-conf gate만. 내 retrieval 인프라(ad_lib `_retrieval_adjust`+`return_emb`, work/retrieval_pack 144MB, cfg work/retrieval_cfg.json 보수) 준비됨.
+3. **session-balanced fine-tune (미구현, 최우선 GPU실험)**: train row-uniform→세션당 균등(1/session_len 가중 or epoch당 세션당 1step random). 긴세션(max18) 편향 제거→히든(세션당~1관측)에 근접. best checkpoint서 low-LR 1~2ep FT. 기대 +0.000~0.006. **단독제출 금지, tri 앙상블 후보로만.** 검증=일반 holdout 아닌 low-NN/session-balanced stress split + LB.
+4. **LB 클래스분포 프로빙 (진행대기, GPU불필요)**: packages/probe_<14클래스>.zip 상수제출 → 히든 클래스분포 역산(n_c=30000·14M/(2−14M), eda/prior_from_probe.py). **히든 분포 최초 측정** → bias를 히든prior 재적합. 다르면 +0.002~0.005, 같으면 천장확정. "submission=oracle" 하네스.
+
+### 즉시 실행 순서 (재개 시)
+1. GPU 복구 확인: `nvidia-smi` 정상이면 OK (docker restart로 NVML 복구됐어야). 안되면 재차 restart.
+2. **LB 프로빙**: probe zip들 사용자에 제출요청 → 점수로 prior_from_probe.py 역산 → bias 재적합 제출.
+3. **session-balanced FT 구현**(teacher_cli/train_full_cli에 AD_SESSION_BALANCED) → fold0 stress검증 → LB canary.
+4. retrieval→tri: 조원에게 tri logits 요청(사용자 경유) → `_retrieval_adjust` 이식 → LB.
+5. 매 결정 codex 토론(`/codex` 또는 work/rNN_brief 절차) — 판정 DEBATE.md 기록.
+
+### 운영 필수
+- 브랜치 jeong. 커밋 push: DNS 자주 끊김 → `.claude/settings.json` PreToolUse hook이 git/curl 전 8.8.8.8 자동추가. 수동시 `echo 'nameserver 8.8.8.8'>>/etc/resolv.conf`.
+- docker: `export DOCKER_API_VERSION=1.43`. 검증=mun-jtest(오프라인 T4재현). `bash sim/train_and_verify.sh` 또는 수동 package_single+prep_verify+docker exec.
+- codex: `CODEX_HOME=/root/.codex /root/.vscode-server/extensions/openai.chatgpt-*/bin/linux-x86_64/codex exec --sandbox read-only --skip-git-repo-check --ephemeral -C /root/Action_Decision -c model_reasoning_effort='"xhigh"' --color never - < brief.md`. bwrap로 파일 못읽음→자료 인라인 필수. `pgrep -f "[c]odex exec"`(브래킷). 커맨드 `/codex`·`/labstatus` 있음(.claude/commands).
+- ⚠️ pkill은 브래킷패턴(`[t]eacher_cli`), kill/재발사 분리(자기매칭 자살 방지).
+- 조원 중복금지: 조원=model/mdeberta/seed/tri. 나=retrieval/구조/프로빙/session-balanced. 제출쿼터 공유(하루10, 다 써도 됨).
+
 ## 6. 컴퓨트 운영 노하우 (colab CLI) ⚠️
 - `colab` CLI(google-colab-cli)로 전 과정 자동화: `new/upload/exec/download/stop`. 세션=라이브 커널, exec 간 상태 유지.
 - **세션 수명 ≈ 60분** (OAuth 토큰 만료 시 keep-alive 데몬이 갱신 못함 → VM 회수). **모든 작업을 55분 내 완결 + 즉시 다운로드** 설계.
