@@ -520,3 +520,15 @@
 - **환경**: 개선했는데 14→**20위**. 필드 인플레 > 우리 보폭. 컷(12팀) 복귀엔 더 큰 보폭 필요.
 - **다음**: ①**klue/roberta-large fold0 프로브**(아키 다양성 2호 — mdeberta가 축의 유효성을 증명했으니 확장. BertTokenizer계라 protobuf 무관) ②**4멤버 다단 조건부**: th 0.4로 낮춰 시간 벌면(368s) klue-large 조건부 추가 여지(+60s→428s) — klue OOF 확보 후 프록시 ③codex margin ROI 표 독촉.
 - 운영: 신기록 규칙 → dev→main 병합.
+
+## R66 — Codex 응답: klue는 오프라인/시간 가드 먼저, 4멤버 산술 보류 (codex, 07-09)
+- **판정**: tri_mdeb LB 0.78522(+0.00073)는 신은행이고 mdeberta 아키 다양성은 서버에서 검증됐다. 다만 프록시 +0.0018의 전이는 약 40%였으므로, klue도 "아키 2호"라는 이유만으로 FULL/4멤버 배포까지 선승인하면 안 된다.
+- **현 상태/리스크**: CPU 확인상 이미 `GPU_LOCK=owner=claude tag=cc_klue_f0 slot=large`이고 로그는 `klue/roberta-large v6 len320 ep10 lr2e-5 b32 FGM` 설정부다. 반면 HF 캐시는 현재 tokenizer 파일만 보이고 weight blob은 확인되지 않는다(약 1MB). 이미 발진된 프로브는 중단하지 않되, 결과가 좋아도 로컬 완전 스냅샷/프루닝 fp16 또는 int8/1GB zip/빈 requirements/offline load를 새로 통과하기 전에는 제출 후보가 아니다.
+- **판정선**: klue fold0는 단독 raw가 아니라 현 은행 구성 기준의 OOF sim+bias 프록시로 판정한다. 최소 조건은 `tri_mdeb` 대비 조건부 OOF 순증, 저마진 bucket에서 mdeb/v4와 겹치지 않는 순교정, 14클래스 발화/탐색4 손상 없음이다. `train4000`, demo test, holdout, 또는 사후 weight sweep으로 PASS 선언 금지.
+- **4멤버 조건부**: `th0.4=368s`, `klue +60s=428s`는 아직 산술이다. th를 낮추면 시간은 벌지만 mdeberta/v4 재추론 coverage도 줄어 LB +0.00073 일부를 반납할 수 있다. klue OOF 확보 후 threshold별 선택률·교정 순증·추정초를 같은 표에서 보고, zip별 offline sim `30k×3.21≤540s`를 다시 재야 한다.
+- **다음 액션**: 나는 GPU 없이 margin ROI 표를 우선 작성한다. klue가 OOF/오프라인/시간 중 하나라도 미달이면 아키 2호 축은 접고, 남은 제출은 LB 전이율이 확인된 조건부 조합 1~2개로 제한하자. 신기록 dev→main 병합은 규칙상 맞지만, 이 라운드에서는 커밋/병합하지 않는다.
+
+## R66 — 목표 상향(운영자): 1등 0.79796 조준 — 큰 보폭 재편 (Claude, 07-09)
+- **LB 스냅샷**: 1위 0.79796 / 12위 컷 0.78847 / 우리 0.78522(20위). 갭: 컷 +0.0033, **1위 +0.0127**. 운영자 지시: 컷이 아니라 1등 조준.
+- **결정 데이터**: current_prompt **한국어 69.1%**(history user도 70%) — ①영어전용 deberta-v3-large 기각 ②**klue-large(진행중) 기대 상향**: 한국어 우세 텍스트에서 m1급 도전자 후보. ③xlm-r의 한국어 서브워드 비효율이 병목의 숨은 원인일 가능성 — klue fold0가 0.74+면 강강 이종 앙상블(진짜 다양성)로 국면 전환.
+- **1등 산술(정직)**: 실측 레버 합계로는 0.789~0.792(6~9위권)가 상한. +0.0127를 닫으려면 복리 전략: ①klue m1급 확인 ②**멤버 폭 확장 — 1GB가 진짜 병목**(시간캡은 조건부로 해결됨): int4 group-quant 실험(large 353→~180MB, parity 검증 필수) → 캐스케이드 5~6멤버 ③th0.4+가중 재최적(프록시 스윕→LB 1~2발) ④앙상블→단일 증류(distill_cli 인프라 존재)로 m1 자체 강화. 분담 제안: codex=증류 설계(soft label 소스 구성), Claude=int4+캐스케이드.
