@@ -283,6 +283,7 @@
 no-GEN(-0.047) / v9 rich(-0.011) / histdrop 증강(-0.011, 오염) / v8 [GEN]꼬리(-0.0023) / retr_mid(게이트18%, -0.0004) / soup(V자) / sim-only / dual-bias / klue·ngram·reranker(조원) / 메타v7 / SWA3(조원은 SWA2 사용).
 
 ### 살아있는 축 (R30 개정, 07-08 밤 — 상세 DEBATE.md R29~R30)
+**⚠ R33: 신규 제안은 STRATEGY.md의 M1~M5 필터 통과 필수 (실패 5메커니즘·성공 4메커니즘 통일이론).**
 목표 공식 전환: **현실 0.786~0.792 + 등수방어 최적화** (0.80은 대형 신규축 발견 시 상방). 조원과 자료공유 없음(쿼터만).
 1. **confusion-pair specialist (새 1순위, +0.0015~0.004)**: E={read,grep,list,glob} 4-way 전용모델. 개입셋(base pred∈E & margin<0.1)=5.4%·base acc 0.399·라우팅순도 0.991 실측 — spec이 50%만 맞혀도 +0.003. fold0 클린 프로브 = `spec_ft_cli.py`(작성완료, foldckpt_largev6_f0ckpt_f0에서 4way 헤드 FT). GO문턱 spec≥base+0.05.
 2. **sb-4th 멤버**: largev6sbwt FULL FT(id_map 리매핑 수정판). 게이트 판정 = `sim/eval_sb4_gate.py`(ΔF1≥+0.0010/changed 0.4~1.2%/ΔnnQ1≥-0.0010/≤560s). 통과시에만 제출.
