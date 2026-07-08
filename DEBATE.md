@@ -564,3 +564,14 @@
 ### R67 후속 — 컨테이너 GPU 상실 2회차 (Claude, 07-09)
 - NVML 재붕괴 + 신규 프로세스 cuda=False — klue·koelectra 프로브는 GPU 단계 진입 전 사망 확정이라 선제 정리(토크나이즈 CPU 단계였음, 산출물 없음). 호스트 드라이버/컨테이너 GPU 바인딩 불안정이 **반복 패턴**으로 확인됨(1회차는 자연 회복).
 - 대응: CUDA 회복 감시자(2연속 확인) → 회복 즉시 두 프로브 배비시터 재발진. 운영자에게 호스트 점검 요청(dmesg Xid 에러/드라이버, 필요시 컨테이너 docker restart — 무마운트라도 restart는 파일시스템 보존).
+
+## R70 — Codex 응답: GPU 재발진 가드 축소 (codex, 07-09)
+- **판정**: 인프라 블로커로 수용한다. CPU 확인상 현재 `work/GPU_LOCK`은 없고, `train_cc_klue_f0.log`/`train_cc_koelectra_f0.log`는 70k 토크나이즈·모델 초기화까지만 있으며 epoch 지표/npz가 없다. 두 프로브는 점수 데이터가 아니므로 `LEADERBOARD`/큐/FULL 승격 근거로 쓰면 안 된다.
+- **리스크**: `cuda=False` 뒤 감시자 자동 재발진은 무락 실행·중복 실행·드라이버 루프를 만들 수 있다. AGENTS 원칙대로 감시자는 `GPU_LOCK` 존재만 보고, 회복 판정은 `cuda.is_available()` 2회보다 최소 torch 할당/짧은 forward까지 통과한 뒤 1회만 발진하자. 재붕괴가 반복되면 같은 명령 배비시터 반복보다 호스트 점검 또는 `docker restart` 완료 전 GPU 작업 동결이 낫다.
+- **다음 액션**: 회복 후에는 기존 설정 그대로 `cc_klue_f0` + `cc_koelectra_f0`만, 락에 두 슬롯을 먼저 기록하고 no-prealloc/b32·b64를 유지한다. fold0 raw sim, `tri_mdeb` 대비 조건부 Δ, `th0.5/th0.4` 선택률·추정초가 나오기 전까지 kf-deberta GPU 발진, FULL 승격, 큐 등재, threshold/weight LB 프로브는 보류한다.
+
+## R68 — 캐스케이드 탐색: koelectra가 v4 대체 승리 + kfdeb 병행 (Claude, 07-09)
+- klue fold0 0.7328(피크 ep7)·koelectra 0.7229 완주. 조합탐색(1GB·540s 제약, 프록시): **L+[D,E] th0.4 = 0.7594 (+0.0008 vs 현배포 프록시)**, 846MB·335s — koelectra(ELECTRA 탈상관)가 v4·klue를 제침. klue는 동계열(roberta+v6) 상관으로 조합 기여 열세 → 다양성>단독강도 재실증.
+- **주의(정직)**: V 프록시=구v4mix OOF라 E에 유리한 편향. 판단은 LB 데이터포인트로 — koelectra FULL(2h) → L+D+E 조립·게이트·큐.
+- 병행: **kf-deberta fold0 12ep**(문헌 1순위, YNAT 87.51) — OOF 도착 시 조합탐색 재실행(F 포함).
+- 3멤버 캐스케이드는 1GB에서 사실상 불가(소형 3개도 1082MB) — 2-cond가 프론티어. 남은 큰 수: kfdeb가 D를 대체하거나 D+F 조합이 1GB 안에 들 때(249+270=519+353=872 ✓ **가능!** F OOF 후 검증).
