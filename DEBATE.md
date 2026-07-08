@@ -256,3 +256,4 @@
 - mun-jtest 30k 검증: **A6000 138s→환산 362s PASS**(tri_cond 427s보다 고속), VRAM 10888MB PASS, holdout 0.81261(시뮬 패리티 -0.0006), 분포 붕괴 없음(14클래스 전부).
 - Q3 선반영: **sb+m2+m3(m1 제거) 시뮬 +0.00782** — sb가 m1 상위호환(m1에서 FT했으니 자연). submit_sb_tri.zip 899MB 조립·검증대기 → 내일 1착 후보.
 - 오늘 소비: 프로브3 + tri_sb 1 = 예비 0. 내일 10발 재개.
+- **R31 LB 실측 (21:04): submit_tri_sb = 0.78098 (-0.00168 vs tri_cond) — 사전등록 최악밴드.** 분해: sb 기여 = largeonly 대비 +0.00047(보수 retrieval급). sb의 holdout +0.00628은 오염(2ep 추가 암기) 확정, nnQ1 동반상승도 방어 못함. **교훈(3번째 실증): FULL모델 holdout 델타는 슬라이스 불문 신뢰 불가 — 클린 fold 평가만 유효.** 사전등록대로 sb축 감량(≤1발 진단), 주력=specialist fold0+tri_cond 방어. submit_sb_tri 기대값도 tri_cond±0.001로 강등.

@@ -107,3 +107,4 @@ damped_bias_sim,2026-07-08,jeong,measured-only damped bias 홀드아웃 검증,-
 au_reweight_bias,2026-07-08,jeong,au-가중(λ0.13) OOF bias 재적합,-,-,-,오프라인,,,,,holdout λ0.13 모사 +0.0007±0.0016 노이즈지배. 단독제출 부적격·차기 패키지 동봉 후보
 submit_tri_sb,2026-07-08,jeong,m1+sbwt조건부(저마진26%) w0.55/0.45,v6,320,-,오프라인30k,,,0.81261,,sb=session-balanced weight FT(largefullv6서 lr5e-6 2ep). zip 675MB check PASS. A6000 138s→환산362s PASS VRAM 10888. holdout 시뮬 +0.00628 vs tri_cond(오염 상방편향 주의·클린 fold0 +0.0042 방증). codex R31 GO. 예상 LB 0.7843~0.7852
 submit_sb_tri,2026-07-08,jeong,sbwt+m2+m3(m1제거) w0.55/0.15/0.3,v6+v4,320,-,오프라인,,,0.81475,,시뮬 +0.00782(sb가 m1 상위호환 시사). zip 899MB check PASS·tri bias. 내일 1착 후보(오늘 tri_sb 결과 따라)
+lb_tri_sb,2026-07-08,jeong,m1+sbwt조건부 w0.55/0.45,v6,320,-,LB실측,,,,0.78098,사전등록 최악밴드 적중(-0.00168 vs tri_cond). sb 진짜기여 = largeonly+0.00047뿐(m1과 히든서 중복). holdout +0.00628=오염. nnQ1 슬라이스 방어논리 무력 — FULL모델 holdout 평가 3번째 반전(histdrop·em075·tri_sb). sb축 감량: 내일 ≤1발 진단만
