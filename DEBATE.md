@@ -201,3 +201,32 @@
 - **codex LB정책 개정**: naive OOF 폐기. **portable/인과 feature면 fold 애매해도 LB canary 1발**. fold>+0.010이면 canary. v8류 배치/shortcut은 1회실패 후 폐기. 검증재설계=session/template/language/action-family split.
 - **8일계획(codex)**: D2 rich직렬화(v9) → D3 ablation LB → D4 retrieval/구조 prior → D5 모델다양성(mdeberta rich) → D6 문제재정의(action-family head/transition prior) → D7 distill → D8 수렴. 산식 rich+0.006~12 / retrieval+0.004~10 / 앙상블+0.003~6.
 - **실행 개시: v9 rich직렬화 구현·발사.** v9 = v6 순수상위집합(경로 role/depth/basename + result[:100] 유지 + [PACE] elapsed). v6 바이트동일(0/30). read_file(tsx|src|d1|Button.tsx)[success] ok;258 lines 식. portable 인과신호(v8 위치shortcut과 구분). 함대체인(fold0게이트 0.736 → folds1-4 → FULL → 패키징 → 검증) 발사.
+
+## R27 — session-balanced FT 게이트 판정 (07-08)
+- R26의 유일 GPU실험을 구현·실행: `AD_SESSION_BALANCED=weight`(1/session_len) / `sample`(epoch당 세션당 1step), baseline fold0 checkpoint에서 LR5e-6 FT. `sim/eval_stress.py`로 fold0-val stress 평가.
+- baseline: overall 0.7485, sim 0.7424, nnQ1(low) 0.6155, sess1-2 0.6314, hist0 0.4852.
+- **weight**: overall 0.7527(+0.0042), sim 0.7443(+0.0019), sess1-2 0.6792(+0.0478), hist0 0.4976(+0.0124), agree 0.9649. 단 **nnQ1 0.6149(-0.0007)**.
+- **sample**: overall 0.7509(+0.0024), sim 0.7423(-0.0001), sess1-2 0.6816(+0.0502), hist0 0.5071(+0.0219), agree 0.9701. 단 **nnQ1 0.6108(-0.0048)**.
+- 판정: session-balanced는 짧은 세션/hist0 편향 제거에는 성공했으나, 가장 히든유사 proxy로 둔 low-NN이 둘 다 악화. R26 게이트(`nnQ1`·`sess1-2` 동시 상승 + agree<0.97) **불통과**. FULL/LB canary는 보류. `weight` checkpoint는 tri/retrieval 결합 재료로 보관만.
+- 다음 수: GPU 추가 train 변형 중단. 사용자가 제출 슬롯 부족으로 **LB prior probe 미제출**을 확정. 또한 조원과는 자료 공유/대화가 없으므로 조원 의존 축 제거. 우리 자체 최고 `tri_cond 0.78266` 위에 retrieval을 넣는 쪽으로 전환.
+
+## R28 — compact retrieval로 자체 tri_cond 후보 생성 (07-08)
+- 기존 retrieval pack 137MB는 tri_cond(0.943GB)에 못 들어감. `emb_v6_70k`를 384d Gaussian projection+fp16으로 줄여 `work/retrieval_pack_p384` 54.7MB 생성. train top1 agreement 0.725라 보수 prior 용도로는 사용 가능.
+- `ad_lib` 수정: `proj.npy` 지원, ensemble/conditional 점수 위 retrieval adjust, m1 확률+embedding 동시 회수로 중복 forward 제거. `package_ensemble`/`package_single`도 compact pack 복사 지원.
+- 후보 `submit_tri_cond_retr_p384.zip`: tri_cond(w0.6/0.15/0.25, th0.5) + retrieval conservative cfg. 용량 0.993GB, check_zip PASS, offline n=64 PASS.
+- 30k 검증: tri_rebuild A6000 212s/VRAM10868/holdout0.80702 vs retr_p384 A6000 216s/VRAM10964/holdout0.80984. changed 147/30000=0.49%, retrieval gate 2.62%. holdout 이득은 self-retrieval 오염이라 LB예측 금지.
+- p256 fallback도 생성: 0.976GB, A6000 211s, gate 2.72%, changed 172/30000=0.57%, holdout net +16(p384 +20). 용량은 더 안전하지만 보존율 낮아 2순위.
+- 판정: 자체 기록 갱신용 LB 1발 후보는 **p384**. 근거는 largeonly retrieval 보수 실측 +0.00045뿐이라 기대는 `+0~+0.0005`, 하방은 gate 0.49%로 제한적. mid/aggressive는 이미 음수였으므로 금지. 업로드/용량 문제가 생기면 p256으로 대체.
+- **LB 실측 (07-08 14:38): 0.78261 = tri_cond 0.78266 대비 -0.00005 평탄.** 러닝타임 6:54. retrieval prior의 largeonly 이득(+0.00045)이 tri 위에서 소멸 — codex R25 "+0.0000~+0.0004" 예측의 하단 적중(tri가 이미 같은 오류를 고침). **retrieval→tri 축 실측 종결.**
+- 팀 운영 확정(사용자): **조원과는 제출쿼터만 공유, 자료·대화 공유 일절 없음.** 조원 산출물 의존 계획 전면 폐기. LB prior probe도 쿼터 사유로 미제출 확정 — 단 zip 내부 transductive 추정으로 대체 가능(R29 예정).
+- 목표 재상향(사용자 지시): top12 방어 수비 아닌 **0.80 돌파용 혁신 결과물** — 모든 정보(transductive test-time·LB이력 역공학·하네스 전체) 총동원.
+
+## R29 — transductive EM label-shift, probe 없이 hidden prior 추정 (07-08)
+- Claude 잔여물 `eda/labelshift_em_sim.py` 실행: largeonly 5fold 확률에서 Saerens EM. `em0.5+bias`는 identity -0.0003로 거의 중립, dir30/dir10 shift에서는 +0.005~+0.020. 단 largeonly 단독은 약해 tri_cond에서 재검증.
+- 구현: `ad_lib.predict()`에 `meta["labelshift_em"]` 처리 추가. 위치는 ensemble/conditional/retrieval score 산출 뒤, postproc bias 직전. `package_ensemble.py`/`package_single.py`는 `--labelshift_em`으로 OOF 평균 `pi_ref`를 run_meta에 저장.
+- tri_cond holdout-only 재추론(실제 rebuild 패키지, 5,810행): bias 0.8070 → em0.5 0.8084(+0.0014), em0.75 0.8091(+0.0020). dir100/30/10 prior-shift resample 대부분 양수. `em1.0`은 일부 붕괴하므로 금지.
+- 후보 생성/검증:
+  - `submit_tri_cond_em05.zip`: 0.943GB, check PASS, A6000 209s, VRAM10868, EM pi_l1=0.064, changed(prebias)=1.27%, holdout 0.80768.
+  - `submit_tri_cond_em075.zip`: 0.943GB, check PASS, A6000 210s, VRAM10868, EM pi_l1=0.064, changed(prebias)=1.76%, holdout **0.80907**.
+- `em075` 최종 라벨 변화: 373/30000(1.24%), holdout 67/5810(1.15%), fixes31/breaks24/net+7. macro 이득은 ask_user(+0.016), plan_task(+0.012), read_file(+0.0068) 쪽. grep_search -0.0057 비용.
+- 판정: **새 자체 LB 후보 1순위 = `packages/submit_tri_cond_em075.zip`**. probe 제출 없이 hidden batch 확률만 쓰는 구조 축이라 R28 retrieval보다 더 정당한 한 발. 단 LB 실측 전까지 과신 금지 — 제출 슬롯을 쓸지 사용자 결정 필요.

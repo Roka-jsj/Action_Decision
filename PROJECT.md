@@ -302,6 +302,32 @@ no-GEN(-0.047) / v9 rich(-0.011) / histdrop 증강(-0.011, 오염) / v8 [GEN]꼬
 - ⚠️ pkill은 브래킷패턴(`[t]eacher_cli`), kill/재발사 분리(자기매칭 자살 방지).
 - 조원 중복금지: 조원=model/mdeberta/seed/tri. 나=retrieval/구조/프로빙/session-balanced. 제출쿼터 공유(하루10, 다 써도 됨).
 
+## 5.24 R27 session-balanced FT 결과 (07-08) ⚡재개 시 반영
+- **구현 완료**: `teacher_cli.py`에 `AD_SESSION_BALANCED=weight|sample`, `AD_INIT_FROM`, `AD_SAVE_WEIGHTS` 추가. `train_full_cli.py`에도 `AD_SESSION_BALANCED`/`AD_INIT_FROM` 이식(게이트 통과시 FULL FT 가능). `sim/eval_stress.py` 신규: fold0-val을 overall/sim/NN사분위/session길이/hist0로 평가.
+- **fold0 기준점**: `foldckpt_largev6_f0ckpt_f0` = 0.7485 / sim 0.7424 / nnQ1(low) 0.6155 / sess1-2 0.6314 / hist0 0.4852.
+- **weight FT** (`1/session_len`, ckpt에서 LR5e-6 2ep): best epoch1 0.7528 / sim 0.7443. stress Δ = overall +0.0042, sim +0.0019, **nnQ1 -0.0007**, sess1-2 +0.0478, hist0 +0.0124, agree 0.9649.
+- **sample FT** (epoch당 세션당 1step, LR5e-6 6ep): best epoch6 0.7508 / sim 0.7421. stress Δ = overall +0.0024, sim -0.0001, **nnQ1 -0.0048**, sess1-2 +0.0502, hist0 +0.0219, agree 0.9701.
+- **판정**: R26 사전 게이트(`nnQ1(low)`와 `sess1-2` 동시 상승 + overall 폭락 없음 + agree<0.97) 기준 **불통과**. 짧은 세션/hist0에는 강한 양성이나, 히든 OOD proxy로 둔 low-NN이 하락. **FULL 학습/LB canary 보류**. 제출 슬롯 부족으로 **LB prior probe는 제출하지 않음**. weight-FT는 tri 결합 재료로만 보관하고, 이후 계획은 조원 자산 없이 우리 자체 구조/파라미터 로그 조합으로 갱신한다.
+- **운영 수정(사용자 지시)**: 조원과는 제출만 공유할 뿐 자료 공유/대화가 없다. 이후 계획에서 조원 의존성 제거. 목표는 우리 보유 구조·파라미터·로그를 조합해 자체 최고 기록을 갱신하는 것.
+
+## 5.25 R28 compact retrieval → 자체 tri_cond 후보 (07-08)
+- **문제**: 기존 retrieval pack은 137MB라 `tri_cond`(약0.943GB)에 동봉하면 1GB 초과. 조원 자산 없이 우리 최고 `tri_cond 0.78266` 위에 retrieval을 얹으려면 pack 축소가 필요.
+- **구현**: `sim/build_retrieval_pack_compact.py` 신규. `work/emb_v6_70k.npy`를 centered-normalized 후 Gaussian projection 384d로 줄이고 fp16 저장. `work/retrieval_pack_p384` 크기 54.7MB, train top1 agreement 0.725. `common/ad_lib.py`는 `proj.npy`가 있으면 query embedding도 같은 projection으로 변환. `package_single/ensemble`은 `proj.npy` 선택 복사.
+- **시간 최적화**: 앙상블 retrieval이 m1 large를 중복 forward하지 않도록 `predict_ensemble_probs`/`predict_conditional_probs`에서 m1 확률과 mean-pool embedding을 동시에 회수.
+- **후보 생성**: `packages/submit_tri_cond_retr_p384.zip` = `tri_cond`(w 0.6/0.15/0.25, th0.5) + compact retrieval conservative cfg(`lambda=0.3`, `margin_th=0.3`, `purity=0.7`, `sim_th=0.8943`). 용량 **0.993GB**, `check_zip` PASS.
+- **오프라인 30k 검증**: 기준 `submit_tri_cond_rebuild` A6000 212s / VRAM 10868MB / holdout 0.80702. retrieval 후보 A6000 **216s** / VRAM 10964MB / retrieval gate 2.62% / holdout 0.80984. holdout +0.00282는 retrieval pack이 train 전체를 포함해 self-contamination이 있으므로 LB 예측에 쓰지 않는다. 실제 의미 있는 수치: changed 147/30000(0.49%), 시간 +4s, 용량 +50MB.
+- **p256 fallback**: `packages/submit_tri_cond_retr_p256.zip`도 생성. 용량 0.976GB, A6000 211s, gate 2.72%, changed 172/30000(0.57%), holdout net +16(p384 net +20). 더 안전하지만 retrieval 보존율이 낮아 2순위.
+- **LB 실측**: `submit_tri_cond_retr_p384` = **0.78261**(07-08 14:38, 6분54초). `tri_cond 0.78266` 대비 -0.00005 평탄. largeonly에서 보였던 retrieval 보수 이득(+0.00045)은 tri 위에서 소멸했다. **retrieval→tri 축 종료**.
+
+## 5.26 R29 transductive EM label-shift 후보 (07-08) ⚡현재 1순위
+- **동기**: probe는 제출하지 않는다. 대신 zip 추론은 hidden/test 30k 전체 확률을 한 번에 볼 수 있으므로, Saerens EM으로 serve-time prior를 자체 추정해 log-prob를 재가중한다. 구현 위치는 `scores` 산출 후, retrieval 뒤, bias 적용 직전.
+- **구현**: `common/ad_lib.py`에 `labelshift_em` 후처리 추가. `sim/package_ensemble.py`/`sim/package_single.py`는 `--labelshift_em <shrink>`와 OOF 평균 `pi_ref`를 `run_meta.json`에 저장한다. 작은 batch는 `min_n=512` 아래에서 skip해 smoke test를 안전하게 둔다.
+- **largeonly seed 검증**: `eda/labelshift_em_sim.py` 기준 largeonly는 `em0.5+bias`가 identity -0.0003으로 거의 중립, dir30/dir10 prior-shift에서는 +0.005~+0.020. 단독 제출감은 약해 tri_cond로 재검증.
+- **tri_cond holdout-only 시뮬레이션**: 실제 `submit_tri_cond_rebuild` 모델로 holdout 5,810개 확률을 재추론. bias 0.8070 대비 `em0.5+bias` 0.8084(+0.0014), `em0.75+bias` 0.8091(+0.0020). dir100/30/10 및 flat/minority resample 대부분 양수. `em1.0`은 일부 scenario에서 붕괴해 금지.
+- **30k 오프라인 검증**: `submit_tri_cond_em05.zip` 0.943GB check PASS, A6000 209s/VRAM10868, holdout 0.80768(+0.00066 vs rebuild). `submit_tri_cond_em075.zip` 0.943GB check PASS, A6000 210s/VRAM10868, holdout **0.80907(+0.00205)**.
+- **변경량**: `em075`는 EM pre-bias changed 1.76%, 최종 라벨 changed 373/30000=1.24%. holdout 67/5810=1.15% 변경, fixes 31 / breaks 24 / net +7. class F1은 ask_user +0.0162, plan_task +0.0117, read_file +0.0068가 이득이고 grep_search -0.0057가 비용.
+- **판정**: R29 1순위 자체 LB 후보는 **`packages/submit_tri_cond_em075.zip`**. retrieval과 달리 train-near-dup에 기대지 않고 hidden batch 확률만 쓰므로 probe 없이 제출 가능한 구조 축이다. 제출 전 추가 probe 금지, LB 한 발을 쓸지 여부만 결정.
+
 ## 6. 컴퓨트 운영 노하우 (colab CLI) ⚠️
 - `colab` CLI(google-colab-cli)로 전 과정 자동화: `new/upload/exec/download/stop`. 세션=라이브 커널, exec 간 상태 유지.
 - **세션 수명 ≈ 60분** (OAuth 토큰 만료 시 keep-alive 데몬이 갱신 못함 → VM 회수). **모든 작업을 55분 내 완결 + 즉시 다운로드** 설계.

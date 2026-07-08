@@ -488,7 +488,8 @@ def predict_logits(model_dir, samples, version="v3", max_len=192, batch_size=64,
     return (logits, emb) if return_emb else logits
 
 
-def predict_ensemble_probs(model_root, samples, meta, device=None, return_members=False):
+def predict_ensemble_probs(model_root, samples, meta, device=None, return_members=False,
+                           return_emb_member=None):
     """run_meta의 ensemble 정의에 따라 멤버별 softmax 계산.
 
     meta 예: {"version":"v4","max_len":320,"batch_size":128,
@@ -497,15 +498,24 @@ def predict_ensemble_probs(model_root, samples, meta, device=None, return_member
     """
     import numpy as np
     members = []
+    emb_out = None
     base_ver = meta.get("version", "v4")
     cache = {}
-    for member in meta["ensemble"]:
+    for mi, member in enumerate(meta["ensemble"]):
         mdir = os.path.join(model_root, member["dir"])
         ver = member.get("version", base_ver)
         if ver not in cache:
             cache[ver] = [serialize(s, ver) for s in samples]
         if member.get("type") == "ngram":
             p = predict_ngram_probs(mdir, cache[ver])
+        elif return_emb_member is not None and mi == int(return_emb_member):
+            raw, emb_out = predict_logits(mdir, samples, version=ver,
+                                          max_len=member.get("max_len", meta.get("max_len", 320)),
+                                          batch_size=meta.get("batch_size", 128),
+                                          device=device, texts=cache[ver], return_emb=True)
+            z = raw - raw.max(1, keepdims=True)
+            ez = np.exp(z)
+            p = ez / ez.sum(1, keepdims=True)
         else:
             p = predict_logits(mdir, samples, version=ver,
                                max_len=member.get("max_len", meta.get("max_len", 320)),
@@ -518,10 +528,12 @@ def predict_ensemble_probs(model_root, samples, meta, device=None, return_member
         mean = sum(wi * m for wi, m in zip(w, members)) / sum(w)
     else:
         mean = sum(members) / len(members)
+    if return_emb_member is not None:
+        return (mean, members, emb_out) if return_members else (mean, emb_out)
     return (mean, members) if return_members else mean
 
 
-def predict_conditional_probs(model_root, samples, meta, device=None):
+def predict_conditional_probs(model_root, samples, meta, device=None, return_emb_member=None):
     """조건부 앙상블 — 10분캡 안에서 full 앙상블 이득 대부분 회수 (codex R11 → R12 일반화).
 
     full 멤버들(cond_members 제외)을 전체에 추론·가중혼합 → top1-top2 마진 < margin_th 인
@@ -535,8 +547,10 @@ def predict_conditional_probs(model_root, samples, meta, device=None):
     cond_idx = set(cond.get("cond_members", [len(ens) - 1]))   # 기본: 마지막 멤버만 조건부
     base_ver = meta.get("version", "v4")
     ml, bs = meta.get("max_len", 320), meta.get("batch_size", 128)
+    emb_out = None
 
     def run(mi, subset, texts_cache):
+        nonlocal emb_out
         m = ens[mi]
         ver = m.get("version", base_ver)
         if ver not in texts_cache:
@@ -548,6 +562,13 @@ def predict_conditional_probs(model_root, samples, meta, device=None):
             if k not in tc:
                 tc[k] = serialize(s, ver)
             tx.append(tc[k])
+        if return_emb_member is not None and mi == int(return_emb_member) and len(subset) == len(samples):
+            raw, emb_out = predict_logits(os.path.join(model_root, m["dir"]), subset, version=ver,
+                                          max_len=ml, batch_size=bs, device=device, texts=tx,
+                                          return_emb=True)
+            z = raw - raw.max(1, keepdims=True)
+            ez = np.exp(z)
+            return ez / ez.sum(1, keepdims=True)
         return predict_logits(os.path.join(model_root, m["dir"]), subset, version=ver,
                               max_len=ml, batch_size=bs, device=device, texts=tx,
                               return_probs=True)
@@ -567,7 +588,31 @@ def predict_conditional_probs(model_root, samples, meta, device=None):
             acc = acc + w[mi] * run(mi, sub, tcache)
             wt += w[mi]
         out[sel] = acc / wt
+    if return_emb_member is not None:
+        return out, emb_out
     return out
+
+
+def _retrieval_embedding_from_meta(model_root, samples, meta, device=None):
+    """앙상블/조건부 경로용 retrieval embedding 추출.
+
+    기본은 첫 transformer 멤버를 사용한다. tri 계열은 m1 large-v6 기준으로 retrieval
+    pack을 만들었으므로, 필요하면 run_meta의 retrieval_emb_member(0-index)로 고정한다.
+    """
+    ens = meta["ensemble"]
+    mi = int(meta.get("retrieval_emb_member", 0))
+    if mi < 0 or mi >= len(ens) or ens[mi].get("type") == "ngram":
+        mi = next((i for i, m in enumerate(ens) if m.get("type") != "ngram"), -1)
+    if mi < 0:
+        raise ValueError("retrieval embedding을 뽑을 transformer 멤버가 없음")
+    m = ens[mi]
+    ver = m.get("version", meta.get("version", "v4"))
+    texts = [serialize(s, ver) for s in samples]
+    _, emb = predict_logits(os.path.join(model_root, m["dir"]), samples, version=ver,
+                            max_len=m.get("max_len", meta.get("max_len", 320)),
+                            batch_size=meta.get("batch_size", 128),
+                            device=device, texts=texts, return_emb=True)
+    return emb
 
 
 def _retrieval_adjust(scores, emb, model_dir, cfg):
@@ -581,12 +626,17 @@ def _retrieval_adjust(scores, emb, model_dir, cfg):
     tr = np.load(os.path.join(rdir, "train_emb.npy")).astype(np.float32)   # [Ntr,H] 중심화·정규화됨
     tl = np.load(os.path.join(rdir, "train_labels.npy"))
     mu = np.load(os.path.join(rdir, "emb_mean.npy")).astype(np.float32)
+    pp = os.path.join(rdir, "proj.npy")
+    proj = np.load(pp).astype(np.float32) if os.path.exists(pp) else None
     lam = float(cfg.get("lambda", 0.3)); mth = float(cfg.get("margin_th", 0.30))
     pth = float(cfg.get("purity_th", 0.70)); K = int(cfg.get("k", 8))
     sth = float(cfg.get("sim_th", -1.0)); gcap = float(cfg.get("gate_cap", 0.12))
     ho_med = float(cfg.get("holdout_top1_median", 0.0))
     q = emb.astype(np.float32) - mu
     q /= (np.linalg.norm(q, axis=1, keepdims=True) + 1e-9)
+    if proj is not None:
+        q = q @ proj
+        q /= (np.linalg.norm(q, axis=1, keepdims=True) + 1e-9)
     probs = np.exp(scores - scores.max(1, keepdims=True)); probs /= probs.sum(1, keepdims=True)
     srt = np.sort(probs, axis=1); mgn = srt[:, -1] - srt[:, -2]
     logpc = np.log(probs.mean(0) + 1e-9)
@@ -631,6 +681,59 @@ def _retrieval_adjust(scores, emb, model_dir, cfg):
         print(f"[retrieval] skip (오류 폴백): {e}", flush=True)
         return scores
     return out
+
+
+def _labelshift_em_adjust(scores, cfg):
+    """Serve-time EM label-shift correction (Saerens et al.).
+
+    cfg: {"pi_ref": [C], "shrink": 0.5, "iters": 80, "min_n": 512}.
+    Operates in probability space, then returns log-probs for downstream bias.
+    """
+    import numpy as np
+    if not cfg:
+        return scores
+    n = len(scores)
+    min_n = int(cfg.get("min_n", 512))
+    if n < min_n:
+        print(f"[labelshift_em] skip n={n}<min_n={min_n}", flush=True)
+        return scores
+    eps = float(cfg.get("eps", 1e-9))
+    pi0 = np.asarray(cfg.get("pi_ref", []), dtype=np.float64)
+    if pi0.shape[0] != NUM_CLASSES:
+        print("[labelshift_em] skip (pi_ref missing/bad)", flush=True)
+        return scores
+    pi0 = np.maximum(pi0, eps)
+    pi0 = pi0 / pi0.sum()
+    probs = np.exp(scores - scores.max(1, keepdims=True))
+    probs = probs / probs.sum(1, keepdims=True)
+    pi = pi0.copy()
+    iters = int(cfg.get("iters", 80))
+    tol = float(cfg.get("tol", 1e-8))
+    for _ in range(iters):
+        w = probs * (pi / pi0)
+        w = w / np.maximum(w.sum(1, keepdims=True), eps)
+        new_pi = w.mean(0)
+        if np.abs(new_pi - pi).sum() < tol:
+            pi = new_pi
+            break
+        pi = new_pi
+    shrink = float(cfg.get("shrink", cfg.get("lambda", 0.5)))
+    shrink = max(0.0, min(1.0, shrink))
+    pi_use = (1.0 - shrink) * pi0 + shrink * pi
+    pi_use = np.maximum(pi_use, eps)
+    pi_use = pi_use / pi_use.sum()
+    ratio = pi_use / pi0
+    clip_ratio = float(cfg.get("clip_ratio", 0.0))
+    if clip_ratio > 1.0:
+        ratio = np.clip(ratio, 1.0 / clip_ratio, clip_ratio)
+    out = probs * ratio
+    out = out / np.maximum(out.sum(1, keepdims=True), eps)
+    base = scores.argmax(1)
+    new = out.argmax(1)
+    print(f"[labelshift_em] n={n} shrink={shrink:.2f} "
+          f"pi_l1={np.abs(pi - pi0).sum():.3f} changed={(base != new).mean()*100:.2f}%",
+          flush=True)
+    return np.log(out + eps)
 
 
 def predict_ngram_probs(model_dir, texts):
@@ -724,11 +827,23 @@ def predict(model_dir, samples, version="v3", max_len=192, batch_size=64,
             return out
 
     if meta and meta.get("conditional") and "ensemble" in meta:
-        probs = predict_conditional_probs(model_dir, work, meta, device=device)
+        if meta.get("retrieval"):
+            probs, emb = predict_conditional_probs(
+                model_dir, work, meta, device=device,
+                return_emb_member=meta.get("retrieval_emb_member", 0))
+        else:
+            probs = predict_conditional_probs(model_dir, work, meta, device=device)
+            emb = None
         scores = np.log(probs + 1e-9)
     elif meta and "ensemble" in meta:
-        mean_p, members = predict_ensemble_probs(model_dir, work, meta, device=device,
-                                                 return_members=True)
+        if meta.get("retrieval"):
+            mean_p, members, emb = predict_ensemble_probs(
+                model_dir, work, meta, device=device, return_members=True,
+                return_emb_member=meta.get("retrieval_emb_member", 0))
+        else:
+            mean_p, members = predict_ensemble_probs(model_dir, work, meta, device=device,
+                                                     return_members=True)
+            emb = None
         if meta.get("stacker"):
             # LightGBM 메타: [멤버별 확률(순서=ensemble 순서), 구조피처] — 학습과 동일 배치
             import lightgbm as lgb
@@ -748,6 +863,13 @@ def predict(model_dir, samples, version="v3", max_len=192, batch_size=64,
     else:
         scores = predict_logits(model_dir, work, version, max_len, batch_size, device, max_hist_turns)
         scores = _to_logprobs_np(scores, np)
+
+    if meta and meta.get("retrieval") and "ensemble" in meta:
+        if emb is None:
+            emb = _retrieval_embedding_from_meta(model_dir, work, meta, device=device)
+        scores = _retrieval_adjust(scores, emb, model_dir, meta["retrieval"])
+    if meta and meta.get("labelshift_em"):
+        scores = _labelshift_em_adjust(scores, meta["labelshift_em"])
     if postproc_path and os.path.exists(postproc_path):
         with open(postproc_path, encoding="utf-8") as f:
             _pp = json.load(f)

@@ -20,6 +20,11 @@ ap.add_argument("--weights", default="")          # mean 모드 멤버 가중치
 ap.add_argument("--margin_th", type=float, default=0)  # >0이면 조건부 2-pass(m1 마진<th만 m2 혼합)
 ap.add_argument("--dual", type=int, default=0)          # 1=듀얼 bias(sim/au 서브셋 적합, R14/World C)
 ap.add_argument("--dual_shrink", type=float, default=1.0)  # bias_au/sim ← λ*서브셋 + (1-λ)*글로벌
+ap.add_argument("--retrieval", default="")       # retrieval pack 디렉터리(train_emb/labels/mean)
+ap.add_argument("--retrieval_cfg", default="")    # retrieval config json
+ap.add_argument("--retrieval_emb_member", type=int, default=0)  # embedding 추출 멤버 index(0-base)
+ap.add_argument("--labelshift_em", type=float, default=0.0)     # >0이면 serve-time EM prior 보정 shrink
+ap.add_argument("--labelshift_min_n", type=int, default=512)
 ap.add_argument("--member", action="append", required=True)
 ap.add_argument("--version", default="v4")
 ap.add_argument("--max_len", type=int, default=320)
@@ -52,6 +57,8 @@ for i, spec in enumerate(a.member, 1):
     ens.append(entry)
 
 MEAN = not a.stacker
+if a.labelshift_em > 0 and not (MEAN and a.bias):
+    raise ValueError("--labelshift_em requires mean ensemble mode with --bias OOF globs")
 if not MEAN:
     for f in ["meta.lgb", "postproc.json", "stack_meta.json"]:
         shutil.copy(os.path.join(ROOT, a.stacker, f), os.path.join(mdl, f))
@@ -79,6 +86,16 @@ if a.margin_th > 0:
     rm["conditional"] = {"margin_th": a.margin_th, "cond_members": [len(ens) - 1]}
 if not MEAN:
     rm["stacker"] = "meta.lgb"; rm["stack_members"] = sm["members"]
+if a.retrieval:
+    import shutil as _sh
+    rdst = os.path.join(mdl, "retrieval"); os.makedirs(rdst, exist_ok=True)
+    for f in ("train_emb.npy", "train_labels.npy", "emb_mean.npy", "proj.npy"):
+        srcp = os.path.join(a.retrieval, f)
+        if os.path.exists(srcp):
+            _sh.copy(srcp, os.path.join(rdst, f))
+    rm["retrieval"] = json.load(open(a.retrieval_cfg)) if a.retrieval_cfg else {}
+    rm["retrieval_emb_member"] = a.retrieval_emb_member
+    print(f"[retrieval] pack 동봉 + emb_member={a.retrieval_emb_member} cfg={rm['retrieval']}")
 # mean 모드: 멤버 prob 평균(ad_lib predict가 stacker 없으면 mean_p 사용) + per-class bias
 if MEAN and a.bias:
     sys.path.insert(0, ROOT)
@@ -130,6 +147,15 @@ if MEAN and a.bias:
                                                            "margin_th": a.margin_th or None},
               extra_biases=extra)
     print(f"[mean-bias] fit on {len(oofs)} member OOF {'weighted ' + str(W) if W else 'avg'}")
+    if a.labelshift_em > 0:
+        pi_ref = mean_oof[cov].astype(np.float64).mean(0)
+        pi_ref = pi_ref / pi_ref.sum()
+        rm["labelshift_em"] = {"pi_ref": pi_ref.tolist(),
+                               "shrink": float(a.labelshift_em),
+                               "iters": 80,
+                               "min_n": int(a.labelshift_min_n)}
+        print(f"[labelshift-em] shrink={a.labelshift_em} min_n={a.labelshift_min_n} "
+              f"pi_ref={np.round(pi_ref, 4).tolist()}")
 json.dump(rm, open(os.path.join(mdl, "run_meta.json"), "w"))
 shutil.copy(os.path.join(ROOT, "common", "server_script.py"), os.path.join(pkg, "script.py"))
 open(os.path.join(pkg, "requirements.txt"), "w").close()

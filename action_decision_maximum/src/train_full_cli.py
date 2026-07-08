@@ -2,7 +2,8 @@
 """FULL-70k 최종 멤버 학습 — 전체 데이터(검증 없음) → (옵션)vocab 프루닝 → member zip.
 
 env: AD_MODEL, AD_VERSION(v4), AD_MAXLEN(320), AD_EPOCHS, AD_LR, AD_BATCH,
-     AD_LLRD(1), AD_SEED, AD_TAG, AD_PRUNE(1: xlm-r 계열 프루닝 / 0: klue 등 소형 vocab).
+     AD_LLRD(1), AD_SEED, AD_TAG, AD_PRUNE(1: xlm-r 계열 프루닝 / 0: klue 등 소형 vocab),
+     AD_INIT_FROM(체크포인트 FT), AD_SESSION_BALANCED(""|"weight"|"sample").
 출력: /content/member_<TAG>.zip (모델 디렉터리) + DONE_<TAG>
 """
 import os, sys, subprocess, time, zipfile, json, shutil
@@ -38,12 +39,17 @@ LLRD = os.environ.get("AD_LLRD", "1") == "1"
 SEED = int(os.environ.get("AD_SEED", "1234"))
 PRUNE = os.environ.get("AD_PRUNE", "1") == "1"
 TAG = os.environ.get("AD_TAG", "member")
+INIT_FROM = os.environ.get("AD_INIT_FROM", "")
+SESS_BAL = os.environ.get("AD_SESSION_BALANCED", "")
 SOFT = os.environ.get("AD_SOFT", "")            # teacher 소프트라벨 npz(probs [N,14]) → 증류 모드
 SOFT_W = float(os.environ.get("AD_SOFT_W", "0.3"))   # loss = (1-w)*CE(hard) + w*KL(soft, T)
 SOFT_T = float(os.environ.get("AD_SOFT_T", "2.0"))
 device = "cuda"; assert torch.cuda.is_available()
 print(f"[full] {TAG}: {MODEL} v={VERSION} len={MAX_LEN} ep={EPOCHS} lr={LR} b={BATCH} prune={PRUNE}"
+      + f" sess_bal={SESS_BAL or 'off'} init_from={INIT_FROM or 'hub'}"
       + (f" distill(w={SOFT_W},T={SOFT_T})" if SOFT else ""), flush=True)
+if SESS_BAL not in ("", "weight", "sample"):
+    raise ValueError(f"AD_SESSION_BALANCED must be '', 'weight', or 'sample' (got {SESS_BAL!r})")
 
 set_seed(SEED)
 samples, y, ids = load_train()
@@ -93,7 +99,8 @@ if AUG == "histdrop":
     y = np.concatenate([y, np.array(aug_y, dtype=y.dtype)])
     print(f"[aug:histdrop] +{len(aug_s)}행 증강 → 총 {len(samples)}행 (ratio={ratio})", flush=True)
 
-tok = AutoTokenizer.from_pretrained(MODEL); tok.truncation_side = "left"
+SRC = INIT_FROM if INIT_FROM else MODEL
+tok = AutoTokenizer.from_pretrained(SRC); tok.truncation_side = "left"
 texts = [ad_lib.serialize(s, VERSION) for s in samples]
 enc_all = tok(texts, truncation=True, max_length=MAX_LEN, padding=False)
 INPUT_IDS = enc_all["input_ids"]
@@ -113,7 +120,7 @@ if SOFT:
 
 torch.manual_seed(1234)
 model = AutoModelForSequenceClassification.from_pretrained(
-    MODEL, num_labels=NUM_CLASSES,
+    SRC, num_labels=NUM_CLASSES, torch_dtype=torch.float32,
     id2label={i: c for i, c in enumerate(CLASSES)},
     label2id={c: i for i, c in enumerate(CLASSES)}).to(device)
 if os.environ.get("AD_GRADCKPT", "0") == "1":
@@ -150,27 +157,78 @@ def coll(b):
     return pad_batch(b), torch.tensor([y[j] for j in b]), torch.tensor(b)
 
 opt = make_opt(model)
-dl = torch.utils.data.DataLoader(DS(), batch_size=BATCH, shuffle=True, collate_fn=coll,
-                                 num_workers=4, pin_memory=True, persistent_workers=True)
-tot = len(dl) * EPOCHS
+if SESS_BAL == "sample":
+    from collections import defaultdict
+    sess2rows = defaultdict(list)
+    for i, s in enumerate(samples):
+        sess2rows[s["session"]].append(i)
+    sess_rows = [np.array(v) for v in sess2rows.values()]
+    rng = np.random.RandomState(SEED + 1000)
+    dl = None
+    steps_per_ep = (len(sess_rows) + BATCH - 1) // BATCH
+    print(f"[sess_bal=sample] sessions={len(sess_rows)} steps/ep={steps_per_ep}", flush=True)
+else:
+    dl = torch.utils.data.DataLoader(DS(), batch_size=BATCH, shuffle=True, collate_fn=coll,
+                                     num_workers=4, pin_memory=True, persistent_workers=True)
+    steps_per_ep = len(dl)
+W = None
+if SESS_BAL == "weight":
+    from collections import Counter
+    slen = Counter(s["session"] for s in samples)
+    w = np.array([1.0 / slen[s["session"]] for s in samples], np.float64)
+    w *= len(w) / w.sum()
+    W = w.astype(np.float32)
+    print(f"[sess_bal=weight] min={W.min():.3f} max={W.max():.3f}", flush=True)
+tot = steps_per_ep * EPOCHS
 sch = get_linear_schedule_with_warmup(opt, int(tot * 0.06), tot)
 scaler = GradScaler("cuda")
-lossfn = torch.nn.CrossEntropyLoss(weight=torch.tensor(cw, dtype=torch.float, device=device))
+cw_t = torch.tensor(cw, dtype=torch.float, device=device)
+lossfn = torch.nn.CrossEntropyLoss(weight=cw_t)
+lossfn_none = torch.nn.CrossEntropyLoss(weight=cw_t, reduction="none")
 SWA_K = int(os.environ.get("AD_SWA_K", "0"))   # 마지막 K에폭 가중치 평균(SWA-lite, codex R10)
 swa_sum, swa_n = None, 0
+
+def row_weight(bi):
+    if W is None:
+        return None
+    return torch.as_tensor(W[bi.detach().cpu().numpy()], dtype=torch.float, device=device)
+
+def ce_loss(logits, lb, bi):
+    if W is None:
+        return lossfn(logits, lb)
+    rw = row_weight(bi)
+    l = lossfn_none(logits, lb)
+    return (l * rw).sum() / (rw * cw_t[lb]).sum().clamp_min(1e-8)
+
+def distill_loss(logits, bi):
+    tp = SOFT_P[bi].to(device)
+    logq = torch.log_softmax(logits.float() / SOFT_T, dim=1)
+    tp_t = torch.softmax(torch.log(tp + 1e-9) / SOFT_T, dim=1)
+    if W is None:
+        return torch.nn.functional.kl_div(logq, tp_t, reduction="batchmean") * (SOFT_T ** 2)
+    rw = row_weight(bi)
+    per_row = torch.nn.functional.kl_div(logq, tp_t, reduction="none").sum(1) * (SOFT_T ** 2)
+    return (per_row * rw).sum() / rw.sum().clamp_min(1e-8)
+
 t0 = time.time()
 for ep in range(EPOCHS):
     model.train()
-    for enc, lb, bi in dl:
+    if SESS_BAL == "sample":
+        picks = np.array([r[rng.randint(len(r))] for r in sess_rows])
+        rng.shuffle(picks)
+        it = ((pad_batch([int(j) for j in picks[b:b + BATCH]]),
+               torch.tensor([y[j] for j in picks[b:b + BATCH]]),
+               torch.tensor(picks[b:b + BATCH]))
+              for b in range(0, len(picks), BATCH))
+    else:
+        it = dl
+    for enc, lb, bi in it:
         enc = {k: v.to(device) for k, v in enc.items()}; lb = lb.to(device); opt.zero_grad()
         with autocast("cuda", dtype=torch.float16):
             logits = model(**enc).logits
-            loss = lossfn(logits, lb)
+            loss = ce_loss(logits, lb, bi)
             if SOFT_P is not None:
-                tp = SOFT_P[bi].to(device)                                   # teacher probs
-                logq = torch.log_softmax(logits.float() / SOFT_T, dim=1)
-                tp_t = torch.softmax(torch.log(tp + 1e-9) / SOFT_T, dim=1)   # T-스케일 teacher
-                kl = torch.nn.functional.kl_div(logq, tp_t, reduction="batchmean") * (SOFT_T ** 2)
+                kl = distill_loss(logits, bi)
                 loss = (1 - SOFT_W) * loss + SOFT_W * kl
         scaler.scale(loss).backward(); scaler.step(opt); scaler.update(); sch.step()
     print(f"  epoch {ep+1} done @{(time.time()-t0)/60:.1f}min", flush=True)

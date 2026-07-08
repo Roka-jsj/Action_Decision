@@ -39,11 +39,18 @@ FGM_ON = os.environ.get("AD_FGM", "0") == "1"
 FOLD_LO = int(os.environ.get("AD_FOLD_LO", "0"))
 FOLD_HI = int(os.environ.get("AD_FOLD_HI", "5"))
 EXCLUDE_AU = os.environ.get("AD_EXCLUDE_AU", "0") == "1"   # sim-only 학습 프로브
+# session-balanced 학습 (R26): ""=row-uniform / "weight"=1/session_len 가중 / "sample"=epoch당 세션당 1step
+SESS_BAL = os.environ.get("AD_SESSION_BALANCED", "")
+INIT_FROM = os.environ.get("AD_INIT_FROM", "")             # 체크포인트 디렉터리에서 FT 시작 (모델+토크나이저)
+SAVE_WEIGHTS = os.environ.get("AD_SAVE_WEIGHTS", "0") == "1"  # fold별 best-epoch 가중치 저장(fp16)
 TAG = os.environ.get("AD_TAG", f"{MODEL.split('/')[-1]}_s{SEED}_f{FOLD_LO}{FOLD_HI}")
 HEAD_SEED = 1234
 device = "cuda"; assert torch.cuda.is_available()
 print(f"[teacher] {TAG} model={MODEL} v={VERSION} len={MAX_LEN} ep={EPOCHS} lr={LR} "
-      f"b={BATCH} fp16={FP16} llrd={LLRD} fgm={FGM_ON} folds=[{FOLD_LO},{FOLD_HI})", flush=True)
+      f"b={BATCH} fp16={FP16} llrd={LLRD} fgm={FGM_ON} folds=[{FOLD_LO},{FOLD_HI})"
+      f" sess_bal={SESS_BAL or 'off'} init_from={INIT_FROM or 'hub'} save_w={SAVE_WEIGHTS}", flush=True)
+if SESS_BAL not in ("", "weight", "sample"):
+    raise ValueError(f"AD_SESSION_BALANCED must be '', 'weight', or 'sample' (got {SESS_BAL!r})")
 
 set_seed(SEED)
 samples, y, ids = load_train()
@@ -54,7 +61,8 @@ folds = sp["folds"]
 cnt = np.bincount(y[dev_idx], minlength=NUM_CLASSES)
 cw = len(dev_idx) / (NUM_CLASSES * np.maximum(cnt, 1)); cw /= cw.mean()
 
-tok = AutoTokenizer.from_pretrained(MODEL); tok.truncation_side = "left"
+SRC = INIT_FROM if INIT_FROM else MODEL   # INIT_FROM이면 토크나이저도 체크포인트 것(프루닝 정합)
+tok = AutoTokenizer.from_pretrained(SRC); tok.truncation_side = "left"
 texts = [ad_lib.serialize(s, VERSION) for s in samples]
 t0 = time.time()
 enc_all = tok(texts, truncation=True, max_length=MAX_LEN, padding=False)
@@ -65,7 +73,7 @@ print(f"[tok] {len(texts)} in {time.time()-t0:.0f}s", flush=True)
 def build():
     torch.manual_seed(HEAD_SEED)
     return AutoModelForSequenceClassification.from_pretrained(
-        MODEL, num_labels=NUM_CLASSES,
+        SRC, num_labels=NUM_CLASSES, torch_dtype=torch.float32,  # fp16 저장 ckpt도 fp32 업캐스트
         id2label={i: c for i, c in enumerate(CLASSES)},
         label2id={c: i for i, c in enumerate(CLASSES)}).to(device)
 
@@ -133,6 +141,9 @@ hold_sum = np.zeros((len(hold_idx), NUM_CLASSES), np.float32)
 scores = []
 t0 = time.time()
 GEN = np.array([s["gen"] for s in samples])
+from collections import Counter
+_slen = Counter(groups.tolist())
+ROW_W_ALL = np.array([1.0 / _slen[g] for g in groups], np.float32)  # 세션균등 가중(그룹split이라 fold내 세션 온전)
 for fi in range(FOLD_LO, FOLD_HI):
     tr, va = folds[fi]
     print(f"=== fold {fi} ===", flush=True)
@@ -142,38 +153,73 @@ for fi in range(FOLD_LO, FOLD_HI):
         n0 = len(tr); tr = tr[GEN[tr] == "sim"]
         print(f"    [exclude_au] train {n0} -> {len(tr)}", flush=True)
 
-    class DS(torch.utils.data.Dataset):
-        def __len__(s): return len(tr)
-        def __getitem__(s, i): return int(tr[i])
+    if SESS_BAL == "sample":
+        sess2rows = {}
+        for j in tr:
+            sess2rows.setdefault(groups[j], []).append(int(j))
+        sess_rows = [np.array(v) for v in sess2rows.values()]
+        rng = np.random.RandomState(SEED + 1000 + fi)
+        steps_per_ep = (len(sess_rows) + BATCH - 1) // BATCH
+        dl = None
+        print(f"    [sess_bal=sample] sessions={len(sess_rows)} steps/ep={steps_per_ep}", flush=True)
+    else:
+        class DS(torch.utils.data.Dataset):
+            def __len__(s): return len(tr)
+            def __getitem__(s, i): return int(tr[i])
 
-    def coll(b):
-        return pad_batch(b), torch.tensor([y[j] for j in b])
+        def coll(b):
+            return pad_batch(b), torch.tensor([y[j] for j in b]), torch.tensor(b)
 
-    dl = torch.utils.data.DataLoader(DS(), batch_size=BATCH, shuffle=True, collate_fn=coll,
-                                     num_workers=4, pin_memory=True, persistent_workers=True)
-    tot = len(dl) * EPOCHS
+        dl = torch.utils.data.DataLoader(DS(), batch_size=BATCH, shuffle=True, collate_fn=coll,
+                                         num_workers=4, pin_memory=True, persistent_workers=True)
+        steps_per_ep = len(dl)
+    W = None
+    if SESS_BAL == "weight":
+        w = ROW_W_ALL[tr].astype(np.float64); w *= len(w) / w.sum()   # mean 1 정규화
+        W = np.zeros(len(samples)); W[tr] = w
+        print(f"    [sess_bal=weight] min={w.min():.3f} max={w.max():.3f}", flush=True)
+    tot = steps_per_ep * EPOCHS
     sch = get_linear_schedule_with_warmup(opt, int(tot * 0.06), tot)
     scaler = GradScaler("cuda", enabled=FP16)
-    lossfn = torch.nn.CrossEntropyLoss(weight=torch.tensor(cw, dtype=torch.float, device=device))
+    cw_t = torch.tensor(cw, dtype=torch.float, device=device)
+    lossfn = torch.nn.CrossEntropyLoss(weight=cw_t)
+    lossfn_none = torch.nn.CrossEntropyLoss(weight=cw_t, reduction="none")
+
+    def batch_loss(logits, lb, bi):
+        if W is None:
+            return lossfn(logits, lb)
+        l = lossfn_none(logits, lb)                      # cw_y·CE per row
+        rw = torch.tensor(W[bi.numpy()], dtype=torch.float, device=device)
+        return (l * rw).sum() / (rw * cw_t[lb]).sum().clamp_min(1e-8)  # torch weighted-mean의 세션가중 일반화
+
     fgm = FGM(model) if FGM_ON else None
-    best, bva, bho = -1, None, None
+    best, bva, bho, bsd = -1, None, None, None
     for ep in range(EPOCHS):
         model.train()
-        for enc, lb in dl:
+        if SESS_BAL == "sample":
+            picks = np.array([r[rng.randint(len(r))] for r in sess_rows])
+            rng.shuffle(picks)
+            it = ((pad_batch([int(j) for j in picks[b:b + BATCH]]),
+                   torch.tensor([y[j] for j in picks[b:b + BATCH]]),
+                   torch.tensor(picks[b:b + BATCH]))
+                  for b in range(0, len(picks), BATCH))
+        else:
+            it = dl
+        for enc, lb, bi in it:
             enc = {k: v.to(device) for k, v in enc.items()}; lb = lb.to(device); opt.zero_grad()
             if FP16:
                 with autocast("cuda", dtype=torch.float16):
-                    loss = lossfn(model(**enc).logits, lb)
+                    loss = batch_loss(model(**enc).logits, lb, bi)
             else:
-                loss = lossfn(model(**enc).logits, lb)
+                loss = batch_loss(model(**enc).logits, lb, bi)
             scaler.scale(loss).backward()
             if fgm is not None:
                 fgm.attack()
                 if FP16:
                     with autocast("cuda", dtype=torch.float16):
-                        aloss = lossfn(model(**enc).logits, lb)
+                        aloss = batch_loss(model(**enc).logits, lb, bi)
                 else:
-                    aloss = lossfn(model(**enc).logits, lb)
+                    aloss = batch_loss(model(**enc).logits, lb, bi)
                 scaler.scale(aloss).backward()
                 fgm.restore()
             scaler.step(opt); scaler.update(); sch.step()
@@ -184,7 +230,15 @@ for fi in range(FOLD_LO, FOLD_HI):
         print(f"    epoch {ep+1}: val={mf1:.4f} sim={smf1:.4f} @{(time.time()-t0)/60:.1f}min", flush=True)
         if mf1 > best:
             best = mf1; bva = pv; bho = infer_probs(model, hold_idx)
+            if SAVE_WEIGHTS:
+                bsd = {k: v.detach().cpu().clone() for k, v in model.state_dict().items()}
     oof[va] = bva; hold_sum += bho; scores.append(best)
+    if SAVE_WEIGHTS and bsd is not None:
+        model.load_state_dict(bsd)
+        ck = os.path.join(WORK, f"foldckpt_{TAG}_f{fi}")
+        model.half().save_pretrained(ck, safe_serialization=True)
+        tok.save_pretrained(ck)
+        print(f"    [ckpt saved: {ck} val={best:.4f}]", flush=True)
     del model; torch.cuda.empty_cache()
     # 증분 저장: 세션이 죽어도 완료 fold까지 보존 (fold_hi=현재까지)
     np.savez_compressed(os.path.join(WORK, f"teacher_{TAG}.npz"),
