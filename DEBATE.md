@@ -295,3 +295,9 @@
 - **Q2 384 게이트 락**: fold0 ≥ 0.7470(완화 없음 — 입력확장 변형). 통과시 A(m1+m2+m384) vs B(m1+m384+m3) 클린 폴드 시뮬, **A ≥ B+0.0004일 때만 v4 교체**. m2 제거안은 기본후보 아님(base-e5 이득 실측 확인됨).
 - **Q3 동결 프로토콜**: D-5(내일)=사전등록 5발만, flat이면 탐색 중단 / D-4=은행 zip 재제출 sanity 1발(hash·행수·분포 확인) / D-3=최종후보 2개 재현성 / D-2=cold-run·시간마진, 신규실험 금지 / D-1=최종 2개 확정, 제출 0발 / D-0=상태확인만.
 - **Q4 은행2 = largeonly+retr(0.78096)**: 사전등록 초과분 부재시. tri_cond 재제출은 동일노출이라 private 헤지 약함 — 구조가 다른 2위가 분산 매수에 우월.
+
+## R36 — 조원 0.78522 돌파 레시피 입수 (07-09 00:02, 읽기전용 조사)
+- **submit_cc_tri_mdeb LB 0.78522 = 계정 신기록**(+0.0007 vs 조원 tri_m2new, +0.0026 vs 내 tri_cond). 구성(mun-train 읽기전용 확인, 무수정): m1=xlm-r-large v6(w0.6) + **m2=mdeberta-v3-base(v6, w0.15, vocab prune 58366, 271MB)** + m3=xlm-r-large v4(w0.25), **cond_members=[1,2]** — m2·m3 둘 다 저마진 조건부.
+- **핵심 레시피 차이: mdeberta는 12ep+FGM으로 수렴시켜야 강도동급** — 조원 fold0: 6ep+FGM 0.7126 / **12ep+FGM 0.7465**(large 0.7485 근접). 내 6ep noFGM 프로브 0.6853은 수렴 전 중단이었음(M4 판정 아님 — 측정 오류). FULL=12ep FGM prune 283MB.
+- **이론 정합**: S2(강도동급 달성) + M5 방어(약할 수 있는 멤버를 저마진 조건부로만 개입 — cond_members 확장). 내 클린시뮬 mdeb 10% 전면혼합 +0.0006이 저마진 한정으로 +0.0008 LB 실현.
+- **우리 트랙 이식(자체 학습, 산출물 미복사)**: train_full_cli에 FGM 이식 완료 → mdebfull(12ep FGM v6@320 prune) FULL 학습 gpu_when_idle 체인 발사(384 종료 후 자동). 조합 후보: ①m1+mdeb(cond)+m3 재현 ②384 게이트 통과시 m1+mdeb+m384(977MB, 조원 구성+우리 384 결합) ③+aubias postproc.

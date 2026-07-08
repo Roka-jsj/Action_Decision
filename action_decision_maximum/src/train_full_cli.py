@@ -44,9 +44,10 @@ SESS_BAL = os.environ.get("AD_SESSION_BALANCED", "")
 SOFT = os.environ.get("AD_SOFT", "")            # teacher 소프트라벨 npz(probs [N,14]) → 증류 모드
 SOFT_W = float(os.environ.get("AD_SOFT_W", "0.3"))   # loss = (1-w)*CE(hard) + w*KL(soft, T)
 SOFT_T = float(os.environ.get("AD_SOFT_T", "2.0"))
+FGM_ON = os.environ.get("AD_FGM", "0") == "1"   # 임베딩 적대교란 (R36: mdeberta 12ep 레시피 필수)
 device = "cuda"; assert torch.cuda.is_available()
 print(f"[full] {TAG}: {MODEL} v={VERSION} len={MAX_LEN} ep={EPOCHS} lr={LR} b={BATCH} prune={PRUNE}"
-      + f" sess_bal={SESS_BAL or 'off'} init_from={INIT_FROM or 'hub'}"
+      + f" sess_bal={SESS_BAL or 'off'} init_from={INIT_FROM or 'hub'} fgm={FGM_ON}"
       + (f" distill(w={SOFT_W},T={SOFT_T})" if SOFT else ""), flush=True)
 if SESS_BAL not in ("", "weight", "sample"):
     raise ValueError(f"AD_SESSION_BALANCED must be '', 'weight', or 'sample' (got {SESS_BAL!r})")
@@ -217,6 +218,31 @@ def distill_loss(logits, bi):
     per_row = torch.nn.functional.kl_div(logq, tp_t, reduction="none").sum(1) * (SOFT_T ** 2)
     return (per_row * rw).sum() / rw.sum().clamp_min(1e-8)
 
+class FGM:
+    def __init__(self, m, eps=1.0):
+        self.m, self.eps, self.backup = m, eps, {}
+    def attack(self, emb_name="word_embeddings"):
+        for n, p in self.m.named_parameters():
+            if p.requires_grad and emb_name in n and p.grad is not None:
+                self.backup[n] = p.data.clone()
+                norm = torch.norm(p.grad)
+                if norm and not torch.isnan(norm):
+                    p.data.add_(self.eps * p.grad / norm)
+    def restore(self):
+        for n, p in self.m.named_parameters():
+            if n in self.backup:
+                p.data = self.backup[n]
+        self.backup = {}
+
+fgm = FGM(model) if FGM_ON else None
+
+def total_loss(enc, lb, bi):
+    logits = model(**enc).logits
+    loss = ce_loss(logits, lb, bi)
+    if SOFT_P is not None:
+        loss = (1 - SOFT_W) * loss + SOFT_W * distill_loss(logits, bi)
+    return loss
+
 t0 = time.time()
 for ep in range(EPOCHS):
     model.train()
@@ -232,12 +258,15 @@ for ep in range(EPOCHS):
     for enc, lb, bi in it:
         enc = {k: v.to(device) for k, v in enc.items()}; lb = lb.to(device); opt.zero_grad()
         with autocast("cuda", dtype=torch.float16):
-            logits = model(**enc).logits
-            loss = ce_loss(logits, lb, bi)
-            if SOFT_P is not None:
-                kl = distill_loss(logits, bi)
-                loss = (1 - SOFT_W) * loss + SOFT_W * kl
-        scaler.scale(loss).backward(); scaler.step(opt); scaler.update(); sch.step()
+            loss = total_loss(enc, lb, bi)
+        scaler.scale(loss).backward()
+        if fgm is not None:
+            fgm.attack()
+            with autocast("cuda", dtype=torch.float16):
+                aloss = total_loss(enc, lb, bi)
+            scaler.scale(aloss).backward()
+            fgm.restore()
+        scaler.step(opt); scaler.update(); sch.step()
     print(f"  epoch {ep+1} done @{(time.time()-t0)/60:.1f}min", flush=True)
     if SWA_K and ep >= EPOCHS - SWA_K:
         sd = {k: v.detach().float().cpu() for k, v in model.state_dict().items()
