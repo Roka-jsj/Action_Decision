@@ -305,6 +305,7 @@ no-GEN(-0.047) / v9 rich(-0.011) / histdrop 증강(-0.011, 오염) / v8 [GEN]꼬
 - 브랜치 jeong. 커밋 push: DNS 자주 끊김 → `.claude/settings.json` PreToolUse hook이 git/curl 전 8.8.8.8 자동추가. 수동시 `echo 'nameserver 8.8.8.8'>>/etc/resolv.conf`.
 - docker: `export DOCKER_API_VERSION=1.43`. 검증=mun-jtest(오프라인 T4재현). `bash sim/train_and_verify.sh` 또는 수동 package_single+prep_verify+docker exec.
 - codex: `CODEX_HOME=/root/.codex /root/.vscode-server/extensions/openai.chatgpt-*/bin/linux-x86_64/codex exec --sandbox read-only --skip-git-repo-check --ephemeral -C /root/Action_Decision -c model_reasoning_effort='"xhigh"' --color never - < brief.md`. bwrap로 파일 못읽음→자료 인라인 필수. `pgrep -f "[c]odex exec"`(브래킷). 커맨드 `/codex`·`/labstatus` 있음(.claude/commands).
+- ⚠️ **GPU 공유(07-09)**: 다른 컨테이너와 공유 — 발사 전 `nvidia-smi --query-compute-apps=pid` 확인, 타 프로세스 있으면 `bash sim/gpu_when_idle.sh [max_wait] -- <cmd>`로 대기-발사. 무단 상시점유 금지.
 - ⚠️ pkill은 브래킷패턴(`[t]eacher_cli`), kill/재발사 분리(자기매칭 자살 방지).
 - 조원: **제출쿼터만 공유(하루10). 자료·대화·산출물 공유 일절 없음** — 조원 의존 계획 금지(codex 착각 교정 필수).
 
