@@ -508,3 +508,15 @@
 - 전량통과 구성은 30k 실측 217s×3.21=**697s 시간캡 FAIL**(mdeberta 추론 고비용). **구제: 이중조건부 재설계** — m1 전량, 저마진(th0.5, 31%)만 m2(mdeb)+m3(v4) 재추론. 프록시 이득 전량 보존(Δ+0.0018~20), 30k 재실측 **151.4s×3.21=486s PASS**.
 - run_meta cond_members=[1,2] 수동 지정(ad_lib predict_conditional_probs가 지원). **bias 근사 명시**: mdeberta 5-fold OOF 부재로 bias는 구base-glob 적합 유지 — R14 CV(bias 일반화)·tri_m2new LB(m2교체 무영향) 근거로 승인, 리스크 기록.
 - parity 통과 후 큐 등재. 남은 열린 축: 이 후보의 LB + 다단 조건부(codex ROI).
+
+## R65 — Codex 응답: tri_mdeb 조건부 PASS 수용, LB 전 추가탐색 동결 (codex, 07-08)
+- **판정**: CPU 확인상 `submit_cc_tri_mdeb`의 run_meta는 weights `[0.6,0.15,0.25]`, `margin_th=0.5`, `cond_members=[1,2]`이고 큐에는 0.955GB/486s PASS로 등재돼 있다. 전량 217s×3.21=697s FAIL을 조건부 151.4s×3.21=486s로 구제했으므로 제출 후보 자격은 인정한다.
+- **리스크**: 486s는 캡 540s 대비 여유 54s뿐이라 서버 분산·토크나이저 경로·조건부 선택률 변동에 취약하다. "프록시 이득 전량 보존"은 hidden 보장이 아니고, mdeberta 5-fold OOF 부재로 구base bias를 빌린 점은 LB 해석의 confound로 남는다.
+- **가드**: 이 후보는 `w2=0.15`, `th0.5`, 구base-glob bias를 고정한 단일 데이터포인트로만 제출한다. LB 전 `w2=0.20`, threshold, 새 bias, cond_members 변형은 금지; LB가 은행을 갱신하면 dev→main, +0.00035 미만이면 현재 mdeberta 배포축은 닫는다.
+- **다음 액션**: 운영자 LB 회신 대기 + codex는 GPU 없이 기존 OOF sim으로 다단 조건부 ROI 표를 작성한다. tri_mdeb LB가 실패하면 다음 후보는 새 학습이 아니라 시간캡/OOF ROI가 양수인 조건부 조합으로만 가자.
+
+## R64 — tri_mdeb LB 0.78522 신은행 — 그러나 20위 (Claude, 07-09)
+- **실측**: tri_mdeb **0.78522**(+0.00073) — 아키 다양성 축 LB 검증 성공(프록시 +0.0018의 ~40% 전이). 이중조건부 설계도 서버에서 생존.
+- **환경**: 개선했는데 14→**20위**. 필드 인플레 > 우리 보폭. 컷(12팀) 복귀엔 더 큰 보폭 필요.
+- **다음**: ①**klue/roberta-large fold0 프로브**(아키 다양성 2호 — mdeberta가 축의 유효성을 증명했으니 확장. BertTokenizer계라 protobuf 무관) ②**4멤버 다단 조건부**: th 0.4로 낮춰 시간 벌면(368s) klue-large 조건부 추가 여지(+60s→428s) — klue OOF 확보 후 프록시 ③codex margin ROI 표 독촉.
+- 운영: 신기록 규칙 → dev→main 병합.
