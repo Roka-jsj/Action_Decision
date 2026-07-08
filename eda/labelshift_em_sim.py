@@ -120,3 +120,46 @@ for name, pi_t in scen:
 print("\n=== Δ vs bias(배포 기준) ===")
 for name, (l1, mean) in agg.items():
     print(f"{name:<12} em0.5+bias {mean['em0.5+bias']-mean['bias']:+.4f}   em1.0+bias {mean['em1.0+bias']-mean['bias']:+.4f}")
+
+# === R29 제약(probe-anchored) 변형: 측정 3클래스 고정 ===
+# usage: python3 eda/labelshift_em_sim.py --anchored  (프로브 없이 시뮬: 진짜 카운트를 앵커로 사용해 상한 측정)
+if "--anchored" in sys.argv:
+    ANCH = [CLASSES.index(c) for c in ("read_file", "glob_pattern", "list_directory")]
+    print("\n=== 제약-EM (앵커=read/glob/list 진짜 카운트, 나머지 shrink) ===")
+
+    def em_anchored(P, pi0, pi_anchor, shrink_rest, iters=100):
+        pi = pi0.copy()
+        for _ in range(iters):
+            r = np.clip(pi / pi0, 0.5, 2.0)
+            w = P * r; w /= w.sum(1, keepdims=True)
+            newpi = w.mean(0)
+            newpi = (1 - shrink_rest) * pi0 + shrink_rest * newpi   # 미측정 클래스 shrink
+            for a in ANCH:
+                newpi[a] = pi_anchor[a]                              # 측정 클래스 고정
+            newpi /= newpi.sum()
+            if np.abs(newpi - pi).sum() < 1e-8:
+                return newpi
+            pi = newpi
+        return pi
+
+    def eval_anchored(idx_sample):
+        P = P_hold[idx_sample]; yt = y_hold[idx_sample]
+        pi_true = np.bincount(yt, minlength=NUM_CLASSES) / len(yt)
+        base = macro_f1(yt, (np.log(P + 1e-12) + bias).argmax(1))[0]
+        out = {"bias": base}
+        for sr in (0.0, 0.3):
+            pi_u = em_anchored(P, pi_ref, pi_true, sr)
+            r = np.clip(pi_u / pi_ref, 0.5, 2.0)
+            Pc = P * r; Pc /= Pc.sum(1, keepdims=True)
+            out[f"anch_sr{sr}"] = macro_f1(yt, (np.log(Pc + 1e-12) + bias).argmax(1))[0]
+        return out
+
+    for name, pi_t in scen:
+        if pi_t is None:
+            res = [eval_anchored(np.arange(len(y_hold)))]
+        else:
+            rng = np.random.RandomState(hash(name) % 2**31)
+            res = [eval_anchored(resample_to_prior(pi_t, 6000, rng)) for _ in range(5)]
+        m = {k: np.mean([r[k] for r in res]) for k in res[0]}
+        print(f"{name:<12} bias={m['bias']:.4f} anch_sr0(3클래스만)={m['anch_sr0.0']:.4f}({m['anch_sr0.0']-m['bias']:+.4f}) "
+              f"anch_sr0.3(+EM잔여)={m['anch_sr0.3']:.4f}({m['anch_sr0.3']-m['bias']:+.4f})")

@@ -218,8 +218,17 @@
 - p256 fallback도 생성: 0.976GB, A6000 211s, gate 2.72%, changed 172/30000=0.57%, holdout net +16(p384 +20). 용량은 더 안전하지만 보존율 낮아 2순위.
 - 판정: 자체 기록 갱신용 LB 1발 후보는 **p384**. 근거는 largeonly retrieval 보수 실측 +0.00045뿐이라 기대는 `+0~+0.0005`, 하방은 gate 0.49%로 제한적. mid/aggressive는 이미 음수였으므로 금지. 업로드/용량 문제가 생기면 p256으로 대체.
 - **LB 실측 (07-08 14:38): 0.78261 = tri_cond 0.78266 대비 -0.00005 평탄.** 러닝타임 6:54. retrieval prior의 largeonly 이득(+0.00045)이 tri 위에서 소멸 — codex R25 "+0.0000~+0.0004" 예측의 하단 적중(tri가 이미 같은 오류를 고침). **retrieval→tri 축 실측 종결.**
-- 팀 운영 확정(사용자): **조원과는 제출쿼터만 공유, 자료·대화 공유 일절 없음.** 조원 산출물 의존 계획 전면 폐기. LB prior probe도 쿼터 사유로 미제출 확정 — 단 zip 내부 transductive 추정으로 대체 가능(R29 예정).
+- 팀 운영 확정(사용자): **조원과는 제출쿼터만 공유, 자료·대화 공유 일절 없음.** 조원 산출물 의존 계획 전면 폐기.
 - 목표 재상향(사용자 지시): top12 방어 수비 아닌 **0.80 돌파용 혁신 결과물** — 모든 정보(transductive test-time·LB이력 역공학·하네스 전체) 총동원.
+
+## R29 — 프로브 3발 설계 + prior축 최종 판정 (07-08 저녁, codex xhigh)
+- **입력 실측**: em075(blind EM s0.75, changed 1.24%) LB **0.78173 = -0.00093** — 홀드아웃 게이트(+0.0020)가 또 반전. EM이 추정한 히든 shift(pi_l1 0.064)는 대부분 캘리브레이션 노이즈. 내 시뮬(eda/labelshift_em_sim.py): em0.5+clip은 identity -0.0003 무해·진짜 shift(L1 0.5+)면 +0.008~+0.023 — 방법은 견고하나 shift 존재가 미검증.
+- **Q1 프로브 3발 수정 GO**: read_file(+13.43pp)/glob_pattern(-6.22pp)/list_directory(-4.33pp) — au/sim 판별 최대 3종. edit_file은 질량 커도 판별력 1.72pp라 부적합, grep_search는 4번째 후보. λ_c 산식: λ_read=(p−12.26)/13.43, λ_glob=(8.00−p)/6.22, λ_list=(6.49−p)/4.33. 판정: max−min λ ≤0.12 혼합축 신뢰 / 0.12~0.20 measured만 / >0.20 λ폐기.
+- **Q2 재적합 산식 락 — measured-only damped bias**: b_c(α)=α·log((π*_c+ε)/(π̂_c+ε)) 측정 클래스만, α∈{0.25,0.35,0.50}, changed-rate ≤0.8%(하드 1.0%). **raw logits→prior target 1개→bias 1개→1회 적용**(EM×bias 중첩 금지). λ 일관시에만 au-가중 OOF 재적합이 2순위. 제약-EM은 제출용 아님(γ≤0.3 분석용).
+- **Q3 session-balanced FULL: 학습 GO / blind 제출 NO-GO / tri 4번째 멤버 조건부 GO**: 게이트 = OOF(tri+sb) ≥ tri_cond+0.0010 AND nnQ1 drop ≤0.0010 AND changed 0.4~1.2% AND ≤560s. m2/m3 교체보다 4번째 low-margin 멤버 우선. → **largev6sbwt FULL FT 발사됨**(member_largefullv6에서 weight변형 lr5e-6 2ep).
+- **Q4 0.80 경로 판정: prior축으로 +0.017 불가.** EV 순: ①test-test near-dup/template 클러스터 일관성 +0.005~0.015(유일한 큰 후보, high-conf만) ②confusion-pair specialist/계층분류 +0.002~6 ③이종백본 +0.001~4 ④sb-4th +0.0005~2 ⑤grinding +0.0003~15/발. 은행=tri_cond 0.78266 기준.
+- **Q5 예비 1발 조건부**: Σ|π*−π̂|≥1.5pp AND λ 일관 → measured-only damped bias 오늘 1발 / λ 불일치 → 4번째 프로브 grep_search / 둘 다 아니면 보존.
+- 준비 완료: eda/probe_mixture.py(역산+λ적합), H0 사전등록(read 0.0166772/glob 0.0100298/list 0.0083147 = 히든이 train prior일 때 기대점수).
 
 ## R29 — transductive EM label-shift, probe 없이 hidden prior 추정 (07-08)
 - Claude 잔여물 `eda/labelshift_em_sim.py` 실행: largeonly 5fold 확률에서 Saerens EM. `em0.5+bias`는 identity -0.0003로 거의 중립, dir30/dir10 shift에서는 +0.005~+0.020. 단 largeonly 단독은 약해 tri_cond에서 재검증.
