@@ -261,3 +261,12 @@
 ## R32 준비 — specialist 사망 + 최종 주간 배분 (07-08 심야)
 - **specialist fold0 클린 프로브 NO-GO**: 표적셋 spec 0.360 vs base 0.375(-0.015). 저마진행 = aleatoric(클러스터 라벨일치 69%·R6 61% 무신호와 정합). R30 1순위 축 폐쇄 — 제출 0발 소모.
 - 측정 완료된 축 전황: prior 종결 / cluster +0.0015캡 / sb +0.0005(LB실측) / specialist NO-GO / retrieval→tri 평탄. **남은 것 = 그라인딩·이종백본·은행방어.**
+
+## R32 — 최종 6일·60발 배분 확정 (07-08 심야, codex xhigh)
+- 재배분: **그라인딩 42 / sb_tri 진단 1 / 이종백본 fold0 게이트 1(+통과시 6) / au·bias 4 / 예비 6.** specialist·sb확장·retrieval·prior 재공략 전면 금지. FULL-holdout 델타 기반 의사결정 금지(3연속 반전).
+- 그라인딩 기대순위: ①m2 weight sweep(최우선 8~12발, ±0.03/±0.06 좌표탐색) ②m1/m3 micro-sweep ③m3 문턱 0.45/0.55 ④dist3·s2/s3 저비율(5~15%) correlation break ⑤lgb 2.5~7.5% ⑥au-bias 상방티켓 2~4발.
+- sb_tri 1발 GO: EV +0.00015~25, 신기록권 0.7828~0.7832. 양수여도 sb 확장 금지(weight sweep feature로만).
+- 이종백본(mdeberta류): klue와 다른 점 = 오차 상관구조. fold0 클린 프로브 통과시에만 3~8% 혼합 제출.
+- 동결 규칙: 20발 연속 <0.7829 → 조기동결 / ≥0.7832 → 7/14까지 지속 / ≥0.7838 → 계정최고 추격권.
+- 판정: "0.80 경로 없음. 0.78449 초과는 낮은 확률의 grind 문제."
+- **7/09 물량 사전조립 완료(9개)**: submit_sb_tri(899MB) + tc_m2p03/m2m03/m1m03/m1p03/m2p06/m1m06/tc_mth45/tc_mth55 + tc_aubias(0.5·tri+0.5·au바이어스). 전부 rebuild 기반·check PASS.
