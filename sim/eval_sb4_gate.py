@@ -38,28 +38,11 @@ hold_idx = np.asarray(sp["holdout_idx"]); y_hold = y[hold_idx]
 hs = [samples[int(j)] for j in hold_idx]
 
 def infer(model_dir, version, max_len=320):
-    tok = AutoTokenizer.from_pretrained(model_dir); tok.truncation_side = "left"
-    texts = [ad_lib.serialize(s, version) for s in hs]
-    enc = tok(texts, truncation=True, max_length=max_len, padding=False)["input_ids"]
-    imp = os.path.join(model_dir, "id_map.npy")
-    if os.path.exists(imp):
-        idm = np.load(imp)
-        enc = [idm[np.asarray(e, dtype=np.int64)].tolist() for e in enc]
-    model = AutoModelForSequenceClassification.from_pretrained(
-        model_dir, torch_dtype=torch.float16).cuda().eval()
-    order = sorted(range(len(enc)), key=lambda k: len(enc[k]))
-    probs = np.zeros((len(enc), NUM_CLASSES), np.float32)
-    with torch.no_grad():
-        for b in range(0, len(order), 192):
-            ks = order[b:b + 192]
-            e = tok.pad({"input_ids": [enc[k] for k in ks]}, return_tensors="pt").to("cuda")
-            with autocast("cuda", dtype=torch.float16):
-                lg = model(**e).logits.float()
-            p = torch.softmax(lg, 1).cpu().numpy()
-            for m_, k in enumerate(ks):
-                probs[k] = p[m_]
-    del model; torch.cuda.empty_cache()
-    return probs
+    # ad_lib 배포 경로 그대로: int8(qweights) 복원 + id_map 리매핑 + 길이정렬 배칭
+    p = ad_lib.predict_logits(model_dir, hs, version=version, max_len=max_len,
+                              batch_size=192, return_probs=True)
+    torch.cuda.empty_cache()
+    return p
 
 CACHE = f"{R}/work/sb4_gate_probs.npz"
 if os.path.exists(CACHE):
