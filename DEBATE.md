@@ -239,3 +239,13 @@
   - `submit_tri_cond_em075.zip`: 0.943GB, check PASS, A6000 210s, VRAM10868, EM pi_l1=0.064, changed(prebias)=1.76%, holdout **0.80907**.
 - `em075` 최종 라벨 변화: 373/30000(1.24%), holdout 67/5810(1.15%), fixes31/breaks24/net+7. macro 이득은 ask_user(+0.016), plan_task(+0.012), read_file(+0.0068) 쪽. grep_search -0.0057 비용.
 - 판정: **새 자체 LB 후보 1순위 = `packages/submit_tri_cond_em075.zip`**. probe 제출 없이 hidden batch 확률만 쓰는 구조 축이라 R28 retrieval보다 더 정당한 한 발. 단 LB 실측 전까지 과신 금지 — 제출 슬롯을 쓸지 사용자 결정 필요.
+
+## R30 — 프로브 실측 → prior축 공식 종결 + 목표 전환 (07-08 밤, codex xhigh)
+- **프로브 3발 LB 실측**: read 0.0174632→π*13.93%(+0.70pp) / glob 0.0090039→6.73%(-0.82pp) / list 0.0085129→6.34%(+0.15pp). λ_au=0.130(잔차 0.36pp, train 0.072의 1.8배 au기움), per-class λ 스프레드 0.169=약신호. **히든 prior≈train 확정.**
+- **damped bias 기각(오프라인)**: 정답앵커로도 α0.25~0.5 전부 -0.0003~-0.0009. **원리: macro-F1 최적 bias는 저정밀 클래스를 의도적 과다예측(list π̂9.28% vs 진실6.49%) — 카운트매칭은 F1최적을 되돌림.** codex 동의, R29 Q2 산식 자진 철회. em075(-0.00093) 근본원인 동일. **prior축 3중증거(blind EM/정답앵커/프로브) 종결, 추가 제출 0발.**
+- **λ_au=0.13 잔여 용도**: 공격축 아님. ①au-가중 bias 재적합(+0.0007±0.0016)은 최종 앙상블에 5~12% 이내 저가중 동봉만, non-au 손실 -0.0003 이내 조건 ②"au 1.8배 시나리오 생존" 방어 스트레스테스트.
+- **test-test 클러스터 일관성 강등**: 홀드아웃 실측 커버25%(sim≥0.95)·이웃 라벨일치 69%(aleatoric 천장)·모델 이미 96.4% 자기일관 → 스무딩 최대 +0.0015. R29 Q4 1순위에서 탈락.
+- **새 1순위 = confusion-pair specialist/계층분류 (기대 +0.0015~0.0040)**: E={read,grep,list,glob} 라우팅 게이트(P(E)≥0.70~0.80, precision 우선) → E내부 4-way specialist → pairwise veto(read/grep·list/glob·read/list, base margin<0.12~0.18 AND spec margin>0.08~0.12만 flip) → soft hierarchy 결합 → bias 재최적화. 반전회피 조건: OOF confusion에서만 개입·prior 무접촉·변경률 0.8~2.5%·non-E Δ≥-0.0003·OOF +0.0015 미만 제출금지.
+- **공식 목표 전환(codex 판정)**: 측정축 전합산으로도 0.80(+0.01734) 빡빡 → **현실 0.786~0.792, 등수방어 최적화. 0.80은 대형 신규축 발견 시 상방으로만.**
+- **60발 배분**: 24 그라인딩(시드/증류/조건부) / 16 specialist / 8 sb계열 / 5 이종백본(OOF diversity 조건) / 7 은행방어 예비. 동결: 7/13 22:00 top3 은행 고정, 7/14 16:00 신규축 금지, 마지막 12h 방어만.
+- **오늘 예비 1발**: sb-4th 게이트(OOF+0.0010↑/nnQ1 -0.0010내/changed 0.4~1.2%/≤560s) 통과시에만 사용 — 정보가치(내일 10발 배분 결정)가 점수가치보다 큼. 미달시 보존.
