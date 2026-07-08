@@ -288,3 +288,4 @@
 - **codex 0.795 역설계**: 강화 packing/TAPT + 이종 강교사 + constrained decoder + S5 누적 = 0.790~0.796 (우리 실측과 무모순). 6일 내 재현가능분 = S5 sweep·transition/precondition decoder·max_len 대체 시뮬.
 - **1차 5발 flat 확률 70~80%(codex 사전등록)**. flat이면 남은 ~50발 채우지 말 것: S5 5~10발·max_len m3대체 확인·decoder 3~5발·sanity 3~5발만, 나머지 미제출(M6).
 - GPU 다음 수: v6@384 fold0(강도동급 다양성, m3슬롯 비교) — mdeberta와 달리 동급 강도 전제라 S2 자격.
+- **S5 스윕 실측(R34 후속, 제출 0발)**: 4후보 전부 공간없음 — soft-transition 1~4행 / 금지문구 3행 / dup-failed 음수(재시도가 정답 우세) / precondition 3행. **텍스트 유도가능 규칙은 전부 모델에 흡수됨(M4 확장). S5는 "모델 비접근 정보"(retr_v6의 near-dup 조회)에서만 성립** — 그 공간은 히든 near-dup 빈약으로 이미 소진. S5 축도 종결.
