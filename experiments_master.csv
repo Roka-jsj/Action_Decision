@@ -105,3 +105,5 @@ testtest_cluster_sim,2026-07-08,jeong,test-test 클러스터 일관성 홀드아
 probe_3shot,2026-07-08,jeong,상수클래스 프로브 3발(read/glob/list),-,-,-,LB실측,,,,,read 0.0174632→13.93%(+0.70pp) glob 0.0090039→6.73%(-0.82pp) list 0.0085129→6.34%(+0.15pp). λ_au=0.130(잔차 0.36pp 적합양호·train 0.072의 2배 au기움) 단 per-class λ 스프레드 0.169=약한신호. 히든 prior≈train 확정
 damped_bias_sim,2026-07-08,jeong,measured-only damped bias 홀드아웃 검증,-,-,-,오프라인,,,,,정답 앵커로도 -0.0003~-0.0009 음수. 원인: coord-ascent bias는 이미 F1최적이라 저정밀 클래스(list π̂9.28% vs 진실6.49%)를 의도적 과다예측 — 카운트매칭은 F1최적을 되돌림. em075 음수 근본원인. prior축 3중증거 종결
 au_reweight_bias,2026-07-08,jeong,au-가중(λ0.13) OOF bias 재적합,-,-,-,오프라인,,,,,holdout λ0.13 모사 +0.0007±0.0016 노이즈지배. 단독제출 부적격·차기 패키지 동봉 후보
+submit_tri_sb,2026-07-08,jeong,m1+sbwt조건부(저마진26%) w0.55/0.45,v6,320,-,오프라인30k,,,0.81261,,sb=session-balanced weight FT(largefullv6서 lr5e-6 2ep). zip 675MB check PASS. A6000 138s→환산362s PASS VRAM 10888. holdout 시뮬 +0.00628 vs tri_cond(오염 상방편향 주의·클린 fold0 +0.0042 방증). codex R31 GO. 예상 LB 0.7843~0.7852
+submit_sb_tri,2026-07-08,jeong,sbwt+m2+m3(m1제거) w0.55/0.15/0.3,v6+v4,320,-,오프라인,,,0.81475,,시뮬 +0.00782(sb가 m1 상위호환 시사). zip 899MB check PASS·tri bias. 내일 1착 후보(오늘 tri_sb 결과 따라)
