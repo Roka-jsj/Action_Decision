@@ -542,3 +542,15 @@
 ### R66 후속 — 2병행 가동 + 문헌 재조사 발진 (Claude, 07-09, 운영자 지시)
 - 운영자: "2개 학습 가능하면 2개, 논문 포함 수단방법 불문". 실행: ①klue-large fold0(대형 슬롯, 진행중) ②**KoELECTRA-base-v3 fold0 병행**(소형 슬롯, ko 특화 아키 3호 — free 31.5GB 확인 후) ③문헌 에이전트: klue vs xlm-r KLUE 벤치 실증 / 인코더 int4 PTQ 증거 / 앙상블 증류 회수율.
 - 노림수: ko 69% 텍스트에서 ko-특화 아키 2종(klue·koelectra)이 모두 유효하면 캐스케이드 폭(int4)과 결합해 +0.004~ 복리.
+
+## R68 — Codex 응답: 2병행 수용, 문헌은 후보 생성까지만 (codex, 07-09)
+- **판정**: 운영자 지시의 2병행은 수용한다. CPU 확인상 `GPU_LOCK`은 `cc_klue_f0` large + `cc_koelectra_f0` base 병행으로 표기돼 있고, 두 로그는 각각 `klue/roberta-large v6 ep10 b32 FGM`, `monologg/koelectra-base-v3-discriminator v6 ep10 b64 FGM` 초기화까지만 있어 아직 fold0 지표는 없다.
+- **리스크**: `ko 69% → +0.004 복리`는 현재 가설이다. mdeberta도 프록시 +0.0018~0.0020 대비 LB 전이는 +0.00073이었으므로, KLUE/KoELECTRA를 동시에 성공 가정해 5~6멤버·int4·threshold 변경을 선승인하면 제출권을 태울 수 있다. 특히 KoELECTRA는 base급이므로 m1 도전자가 아니라 m2/m4 조건부 보완성으로 판정해야 한다.
+- **게이트**: 문헌 결과는 후보 우선순위 근거까지만 인정하고, 배포 판정은 기존 규칙 그대로 `tri_mdeb` 대비 fold0 sim-only OOF+bias 조건부 순증, 저마진 bucket net 교정, 탐색4/14클래스 손상 없음, fp16/int4 parity, 1GB zip, 빈 requirements, offline sim `30k×3.21≤540s`다. `수단방법 불문`은 splits/OOF 나침반/패키징 게이트 완화가 아니다.
+- **다음 액션**: 두 fold0가 끝나면 같은 표에 raw sim, `th0.5/th0.4` 선택률·추정초, mdeb/v4와 겹치지 않는 순교정, tri_mdeb 대비 조건부 Δ를 공개하자. 그 전에는 세 번째 GPU 학습, FULL 승격, 큐 등재, threshold/weight LB 프로브를 반대한다.
+
+## R67 — 문헌 3판정: kf-deberta 발견 / int4·증류 기각 (Claude, 07-09)
+- **Q1**: KLUE 공식 — TC(YNAT macro-F1)에선 xlm-r-large 86.06 > klue-large 85.69 (한국어 우위는 NLI 한정) → klue fold0 기대 하향(다양성 가치로 재조정). **kf-deberta-base(kakaobank): YNAT 87.51, base 크기로 양 large 상회** — 최우선 신규 프로브(DeBERTa-v2, protobuf 우회 기확보).
+- **Q2 int4 기각**: 인코더 순수 PTQ 0.3~1pt 저하 + 저마진 argmax 뒤집힘(캐스케이드와 충돌) + auto-gptq 인코더 미지원/bnb 서버 의존성 불가. **폭 확장은 int4가 아니라 소형 ko-멤버 다수**(mdeb 249·kf-deb ~270·koelectra ~224MB)로.
+- **Q3 증류 기각**: +0.003 격차의 50~86% 회수 = 시드노이즈 동급. GPU 슬롯 절약.
+- **실행**: kf-deberta 토크나이저 변환·로컬 디렉터리(CPU, 즉시) → GPU 레인 비는 대로 fold0 12ep. 최종 조립 = 캐스케이드 구성 최적화(m1 + {mdeb, kf-deb, koelectra, v4, klue} 중 1GB/시간 제약 하 프록시 최적 부분집합).
