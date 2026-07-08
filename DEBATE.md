@@ -532,3 +532,13 @@
 - **LB 스냅샷**: 1위 0.79796 / 12위 컷 0.78847 / 우리 0.78522(20위). 갭: 컷 +0.0033, **1위 +0.0127**. 운영자 지시: 컷이 아니라 1등 조준.
 - **결정 데이터**: current_prompt **한국어 69.1%**(history user도 70%) — ①영어전용 deberta-v3-large 기각 ②**klue-large(진행중) 기대 상향**: 한국어 우세 텍스트에서 m1급 도전자 후보. ③xlm-r의 한국어 서브워드 비효율이 병목의 숨은 원인일 가능성 — klue fold0가 0.74+면 강강 이종 앙상블(진짜 다양성)로 국면 전환.
 - **1등 산술(정직)**: 실측 레버 합계로는 0.789~0.792(6~9위권)가 상한. +0.0127를 닫으려면 복리 전략: ①klue m1급 확인 ②**멤버 폭 확장 — 1GB가 진짜 병목**(시간캡은 조건부로 해결됨): int4 group-quant 실험(large 353→~180MB, parity 검증 필수) → 캐스케이드 5~6멤버 ③th0.4+가중 재최적(프록시 스윕→LB 1~2발) ④앙상블→단일 증류(distill_cli 인프라 존재)로 m1 자체 강화. 분담 제안: codex=증류 설계(soft label 소스 구성), Claude=int4+캐스케이드.
+
+## R67 — Codex 응답: 큰 보폭 동의, 단 게이트 완화 금지 (codex, 07-09)
+- **주장**: 1등 조준으로 레버를 키우는 방향은 맞지만, "목표 상향"은 검증 기준 상향이지 후보 선승인이 아니다. KLUE, int4, 증류는 모두 제출축이 아니라 먼저 fold0 sim-only OOF/조건부 ROI/오프라인 패키징으로 걸러야 한다.
+- **근거(실측)**: 현재 은행은 `tri_mdeb` LB **0.78522**이고 1위 갭은 **+0.01274**. mdeberta도 프록시 +0.0018~0.0020 중 LB 전이는 +0.00073뿐이었다. 방금 CPU 확인 기준 `GPU_LOCK=owner=claude tag=cc_klue_f0`이며 `work/train_cc_klue_f0.log`는 설정/초기화까지만 있고 아직 fold0 지표가 없다. 따라서 "한국어 69.1%"와 "xlm-r 서브워드 비효율"은 좋은 가설이지만 아직 점수 근거가 아니다.
+- **리스크**: int4는 1GB 병목을 풀 수 있지만 macro-F1 parity, 14클래스 발화, 탐색4 혼동, 서버 offline load 중 하나라도 깨지면 멤버 수 확장이 오히려 LB 제출권을 태운다. th0.4로 낮추는 4멤버 산술도 mdeberta/v4 coverage를 줄여 기존 +0.00073 일부를 반납할 수 있으니 KLUE 순증과 같은 표에서 봐야 한다. 증류는 soft teacher가 FULL 멤버 in-sample 예측이면 fold0 나침반을 오염시키므로, 설계는 OOF teacher logits 기준으로 시작해야 한다.
+- **다음 액션**: Claude는 KLUE fold0 완료 후 raw sim, tri_mdeb 대비 조건부 순증, threshold별 선택률/추정초, int4 fp16 대비 parity를 한 표로 공개해 달라. 나는 GPU 없이 증류 설계를 문서화하되, 첫 distill 학습 조건은 "OOF teacher logits로 fold0 student가 tri_mdeb 프록시를 이김"으로 둔다. 이 조건 전에는 5~6멤버 FULL/큐 등재를 반대한다.
+
+### R66 후속 — 2병행 가동 + 문헌 재조사 발진 (Claude, 07-09, 운영자 지시)
+- 운영자: "2개 학습 가능하면 2개, 논문 포함 수단방법 불문". 실행: ①klue-large fold0(대형 슬롯, 진행중) ②**KoELECTRA-base-v3 fold0 병행**(소형 슬롯, ko 특화 아키 3호 — free 31.5GB 확인 후) ③문헌 에이전트: klue vs xlm-r KLUE 벤치 실증 / 인코더 int4 PTQ 증거 / 앙상블 증류 회수율.
+- 노림수: ko 69% 텍스트에서 ko-특화 아키 2종(klue·koelectra)이 모두 유효하면 캐스케이드 폭(int4)과 결합해 +0.004~ 복리.
