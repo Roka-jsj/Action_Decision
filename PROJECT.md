@@ -282,25 +282,30 @@
 ### 사망 확정 (재시도 금지)
 no-GEN(-0.047) / v9 rich(-0.011) / histdrop 증강(-0.011, 오염) / v8 [GEN]꼬리(-0.0023) / retr_mid(게이트18%, -0.0004) / soup(V자) / sim-only / dual-bias / klue·ngram·reranker(조원) / 메타v7 / SWA3(조원은 SWA2 사용).
 
-### 살아있는 축 (codex R26 우선순위)
-1. **tri_v4new 앵커 고정** (0.78449, 최종 기준점, 버리는 실험 금지).
-2. **retrieval→tri 보수 이식** (+0.0002~0.0008): 조원 tri logits/prob 필요(멤버zip 접근불가라 조원 협조). gated coverage 1~5%, alpha 0.05/0.10/0.15, high-conf gate만. 내 retrieval 인프라(ad_lib `_retrieval_adjust`+`return_emb`, work/retrieval_pack 144MB, cfg work/retrieval_cfg.json 보수) 준비됨.
-3. **session-balanced fine-tune (미구현, 최우선 GPU실험)**: train row-uniform→세션당 균등(1/session_len 가중 or epoch당 세션당 1step random). 긴세션(max18) 편향 제거→히든(세션당~1관측)에 근접. best checkpoint서 low-LR 1~2ep FT. 기대 +0.000~0.006. **단독제출 금지, tri 앙상블 후보로만.** 검증=일반 holdout 아닌 low-NN/session-balanced stress split + LB.
-4. **LB 클래스분포 프로빙 (진행대기, GPU불필요)**: packages/probe_<14클래스>.zip 상수제출 → 히든 클래스분포 역산(n_c=30000·14M/(2−14M), eda/prior_from_probe.py). **히든 분포 최초 측정** → bias를 히든prior 재적합. 다르면 +0.002~0.005, 같으면 천장확정. "submission=oracle" 하네스.
+### 살아있는 축 (R30 개정, 07-08 밤 — 상세 DEBATE.md R29~R30)
+목표 공식 전환: **현실 0.786~0.792 + 등수방어 최적화** (0.80은 대형 신규축 발견 시 상방). 조원과 자료공유 없음(쿼터만).
+1. **confusion-pair specialist (새 1순위, +0.0015~0.004)**: E={read,grep,list,glob} 4-way 전용모델. 개입셋(base pred∈E & margin<0.1)=5.4%·base acc 0.399·라우팅순도 0.991 실측 — spec이 50%만 맞혀도 +0.003. fold0 클린 프로브 = `spec_ft_cli.py`(작성완료, foldckpt_largev6_f0ckpt_f0에서 4way 헤드 FT). GO문턱 spec≥base+0.05.
+2. **sb-4th 멤버**: largev6sbwt FULL FT(id_map 리매핑 수정판). 게이트 판정 = `sim/eval_sb4_gate.py`(ΔF1≥+0.0010/changed 0.4~1.2%/ΔnnQ1≥-0.0010/≤560s). 통과시에만 제출.
+3. 그라인딩(시드/증류/조건부 재조합) 24발 / specialist 16발 / sb 8발 / 이종백본 5발 / 예비 7발. 동결 7/13 22:00.
+
+### 종결 확정 (R28~R30 실측, 재시도 금지 추가분)
+- **prior/transductive 축 전체**: blind EM(em075 LB -0.00093) + 정답앵커 count-matching(오프라인 -0.0009) + 프로브 3발(히든 prior≈train, λ_au 0.130) 3중증거. **원리: macro-F1 최적 bias는 저정밀 클래스 의도적 과다예측 — 카운트매칭은 해악.**
+- **retrieval→tri**: p384 LB 0.78261(-0.00005 평탄).
+- **test-test 클러스터 일관성**: 이웃 라벨일치 69% 천장 → 최대 +0.0015 (eda/testtest_cluster_sim.py).
+- session-balanced 단독배포(fold0 nnQ1 하락) — 멤버 후보로만.
 
 ### 즉시 실행 순서 (재개 시)
-1. GPU 복구 확인: `nvidia-smi` 정상이면 OK (docker restart로 NVML 복구됐어야). 안되면 재차 restart.
-2. **LB 프로빙**: probe zip들 사용자에 제출요청 → 점수로 prior_from_probe.py 역산 → bias 재적합 제출.
-3. **session-balanced FT 구현**(teacher_cli/train_full_cli에 AD_SESSION_BALANCED) → fold0 stress검증 → LB canary.
-4. retrieval→tri: 조원에게 tri logits 요청(사용자 경유) → `_retrieval_adjust` 이식 → LB.
-5. 매 결정 codex 토론(`/codex` 또는 work/rNN_brief 절차) — 판정 DEBATE.md 기록.
+1. `nvidia-smi` GPU 확인 → work/sbwt_full.log(sb-FULL FT)·게이트 판정 상태 확인.
+2. specialist fold0 프로브: `PYTHONPATH=$R python3 action_decision_maximum/src/spec_ft_cli.py` (~25분) → GO시 5fold+FULL 확장.
+3. sb-4th: `python3 sim/eval_sb4_gate.py work/raw_largev6sbwt` → PASS시 패키징·T4검증·제출.
+4. 매 결정 codex 토론(work/rNN_brief 절차, R31부터) — 판정 DEBATE.md 기록.
 
 ### 운영 필수
 - 브랜치 jeong. 커밋 push: DNS 자주 끊김 → `.claude/settings.json` PreToolUse hook이 git/curl 전 8.8.8.8 자동추가. 수동시 `echo 'nameserver 8.8.8.8'>>/etc/resolv.conf`.
 - docker: `export DOCKER_API_VERSION=1.43`. 검증=mun-jtest(오프라인 T4재현). `bash sim/train_and_verify.sh` 또는 수동 package_single+prep_verify+docker exec.
 - codex: `CODEX_HOME=/root/.codex /root/.vscode-server/extensions/openai.chatgpt-*/bin/linux-x86_64/codex exec --sandbox read-only --skip-git-repo-check --ephemeral -C /root/Action_Decision -c model_reasoning_effort='"xhigh"' --color never - < brief.md`. bwrap로 파일 못읽음→자료 인라인 필수. `pgrep -f "[c]odex exec"`(브래킷). 커맨드 `/codex`·`/labstatus` 있음(.claude/commands).
 - ⚠️ pkill은 브래킷패턴(`[t]eacher_cli`), kill/재발사 분리(자기매칭 자살 방지).
-- 조원 중복금지: 조원=model/mdeberta/seed/tri. 나=retrieval/구조/프로빙/session-balanced. 제출쿼터 공유(하루10, 다 써도 됨).
+- 조원: **제출쿼터만 공유(하루10). 자료·대화·산출물 공유 일절 없음** — 조원 의존 계획 금지(codex 착각 교정 필수).
 
 ## 5.24 R27 session-balanced FT 결과 (07-08) ⚡재개 시 반영
 - **구현 완료**: `teacher_cli.py`에 `AD_SESSION_BALANCED=weight|sample`, `AD_INIT_FROM`, `AD_SAVE_WEIGHTS` 추가. `train_full_cli.py`에도 `AD_SESSION_BALANCED`/`AD_INIT_FROM` 이식(게이트 통과시 FULL FT 가능). `sim/eval_stress.py` 신규: fold0-val을 overall/sim/NN사분위/session길이/hist0로 평가.
