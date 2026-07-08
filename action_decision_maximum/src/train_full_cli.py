@@ -104,6 +104,13 @@ tok = AutoTokenizer.from_pretrained(SRC); tok.truncation_side = "left"
 texts = [ad_lib.serialize(s, VERSION) for s in samples]
 enc_all = tok(texts, truncation=True, max_length=MAX_LEN, padding=False)
 INPUT_IDS = enc_all["input_ids"]
+# vocab-pruned 체크포인트 FT: 토크나이저는 원본 id를 내므로 id_map으로 compact id 리매핑 필수
+ID_MAP_PATH = os.path.join(SRC, "id_map.npy") if INIT_FROM else ""
+if ID_MAP_PATH and os.path.exists(ID_MAP_PATH):
+    _idm = np.load(ID_MAP_PATH)
+    INPUT_IDS = [_idm[np.asarray(s_, dtype=np.int64)].tolist() for s_ in INPUT_IDS]
+    _K = int(_idm.max()) + 1
+    print(f"[prune-map] id_map 적용: full {len(_idm)} -> compact {_K}", flush=True)
 cnt = np.bincount(y, minlength=NUM_CLASSES)
 cw = len(y) / (NUM_CLASSES * np.maximum(cnt, 1)); cw /= cw.mean()
 
@@ -246,6 +253,12 @@ def save_member(tag):
     raw_dir = os.path.join(WORK, f"raw_{tag}")
     model.half().save_pretrained(raw_dir, safe_serialization=True)
     tok.save_pretrained(raw_dir)
+    if ID_MAP_PATH and os.path.exists(ID_MAP_PATH):
+        # 프루닝 ckpt에서 FT한 모델은 compact vocab 그대로 → id_map 동봉해야 배포 추론 경로 성립
+        shutil.copy(ID_MAP_PATH, os.path.join(raw_dir, "id_map.npy"))
+        _pm = os.path.join(SRC, "prune_meta.json")
+        if os.path.exists(_pm):
+            shutil.copy(_pm, os.path.join(raw_dir, "prune_meta.json"))
     out_dir = os.path.join(WORK, f"member_{tag}")
     if PRUNE:
         K, _ = prune_model_dir(raw_dir, out_dir, tok, texts, max_len=MAX_LEN)
