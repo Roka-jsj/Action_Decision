@@ -257,3 +257,7 @@
 - Q3 선반영: **sb+m2+m3(m1 제거) 시뮬 +0.00782** — sb가 m1 상위호환(m1에서 FT했으니 자연). submit_sb_tri.zip 899MB 조립·검증대기 → 내일 1착 후보.
 - 오늘 소비: 프로브3 + tri_sb 1 = 예비 0. 내일 10발 재개.
 - **R31 LB 실측 (21:04): submit_tri_sb = 0.78098 (-0.00168 vs tri_cond) — 사전등록 최악밴드.** 분해: sb 기여 = largeonly 대비 +0.00047(보수 retrieval급). sb의 holdout +0.00628은 오염(2ep 추가 암기) 확정, nnQ1 동반상승도 방어 못함. **교훈(3번째 실증): FULL모델 holdout 델타는 슬라이스 불문 신뢰 불가 — 클린 fold 평가만 유효.** 사전등록대로 sb축 감량(≤1발 진단), 주력=specialist fold0+tri_cond 방어. submit_sb_tri 기대값도 tri_cond±0.001로 강등.
+
+## R32 준비 — specialist 사망 + 최종 주간 배분 (07-08 심야)
+- **specialist fold0 클린 프로브 NO-GO**: 표적셋 spec 0.360 vs base 0.375(-0.015). 저마진행 = aleatoric(클러스터 라벨일치 69%·R6 61% 무신호와 정합). R30 1순위 축 폐쇄 — 제출 0발 소모.
+- 측정 완료된 축 전황: prior 종결 / cluster +0.0015캡 / sb +0.0005(LB실측) / specialist NO-GO / retrieval→tri 평탄. **남은 것 = 그라인딩·이종백본·은행방어.**
