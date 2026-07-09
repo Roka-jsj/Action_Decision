@@ -3,13 +3,16 @@
 ---
 
 ```
-jeong 브랜치 Dacon 236694 재개(docker restart 후). PROJECT.md §5.23, DEBATE.md R37~R40, STRATEGY.md(§6 포함), 메모리 읽고 복원.
+jeong 브랜치 Dacon 236694 재개(재시작 후). PROJECT.md §5.23, DEBATE.md R41~R44, STRATEGY.md(§6 포함), 메모리 읽고 복원.
 
-현황: 은행=조원 tri_mdeb 0.78522(컷 0.78847 밖). 우리 기준본 0.78283(계보격차 -0.0024 실증·aubias -0.00062 폐쇄). 사용자 전권: 조원 방법·산출물 사용 허용, 모든 방법 동원, GPU 상시 가동, 쿼터 무관.
-공세축: ①int4 완성됨(sim/quantize_member_int4.py + ad_lib p4. m1/v4 171MB·mdeb 107MB, 재고 work/*_q4.zip — 6멤버 캐스케이드 1GB 성립) ②GPU 체인 = v6-large 12ep noFGM fold0 프로브(게이트: fold0 6ep 0.7485 대비 Green≥+0.0040/Yellow+0.0020/Red중단) → mdeb-s777 12ep FGM FULL ③parity 게이트(fp16 vs q4 holdout 델타) 후 6멤버 다단 조건부 캐스케이드 조립(조원 klue 완성분 포함 가능) ④매 수 codex(R41부터)+중대판정 독립 레드팀.
+현황(07-09 저녁): 은행 = 우리 C0 0.78567(30110 submit_c0_klue.zip: 조원m1+조원mdeb+우리klue7ep_q8, cond[1,2], w 0.6/0.15/0.25, 구bias, 서버 380s — 실캡 600s 확인). 컷 0.78847(-0.0028). R44 3자 판정: 0.80 불가(P<1%), 목표=컷(P 35-45%). 사용자 전권: 조원 방법·산출물 사용 허용(컨테이너 수정만 절대금지), 쿼터 무관, GPU 유휴시만 사용(gpu_when_idle.sh).
 
-재개 순서: ①nvidia-smi/CUDA 확인 ②아래 체인 발사 ③int4 parity(ad_lib.predict_logits로 fp16 vs q4 멤버 holdout 5810 비교) ④캐스케이드 설계.
+죽은 축(재론금지): prior/transductive·aubias·S5패치·specialist·384(v6)·sb·koelectra·naive int4·kfdeb(0.7299+ρ0.954+델타-0.0006)·v4 12ep(용량슬롯 없음)·증류(현행 게이트).
 
-학습 체인:
-nohup bash -c 'env HF_HUB_OFFLINE=1 PYTHONPATH=/root/Action_Decision AD_WORK=/root/Action_Decision/work AD_MODEL=xlm-roberta-large AD_VERSION=v6 AD_MAXLEN=320 AD_EPOCHS=12 AD_LR=2e-5 AD_BATCH=64 AD_LLRD=1 AD_FGM=0 AD_SEED=1234 AD_FOLD_LO=0 AD_FOLD_HI=1 AD_TAG=largev6_12ep_f0 python3 action_decision_maximum/src/teacher_cli.py > work/v6_12ep_f0.log 2>&1; env HF_HUB_OFFLINE=1 PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION=python PYTHONPATH=/root/Action_Decision AD_WORK=/root/Action_Decision/work AD_MODEL=microsoft/mdeberta-v3-base AD_VERSION=v6 AD_MAXLEN=320 AD_EPOCHS=12 AD_LR=2e-5 AD_BATCH=64 AD_LLRD=1 AD_FGM=1 AD_SEED=777 AD_PRUNE=1 AD_TAG=mdebfull_s777 python3 action_decision_maximum/src/train_full_cli.py > work/mdeb_s777.log 2>&1' &
+진행 중이던 것:
+① C1: v6 FULL 11ep(work/v6_11ep_full.log, 16:51 실시작·~19:35 zip) → sim/quantize_member.py로 q8 → sim/parity_int4.py 게이트 → bash sim/assemble_c1.sh → 발사. 사전등록: 중앙 0.7864 밴드 [0.7853,0.7880], <0.78567이면 m1 교체 폐기·후속조립은 C0 앵커.
+② klue folds1-4 OOF 농사 웨이터 장전됨(7ep b32 FGM, ~15.5h) — 죽었으면 재발사:
+   bash sim/gpu_when_idle.sh 21600 -- env HF_HUB_OFFLINE=1 PYTHONPATH=/root/Action_Decision AD_WORK=/root/Action_Decision/work AD_MODEL=klue/roberta-large AD_VERSION=v6 AD_MAXLEN=320 AD_EPOCHS=7 AD_LR=2e-5 AD_BATCH=32 AD_LLRD=1 AD_FGM=1 AD_SEED=1234 AD_FOLD_LO=1 AD_FOLD_HI=5 AD_TAG=klue_f14 python3 action_decision_maximum/src/teacher_cli.py > work/klue_f14.log 2>&1
+③ 로드맵: klue농사 → mdeb f1-4(13h) → v6-12ep f1-4(8.5h) → D-4(7/11) 클린 앙상블 OOF 재적합(bias/가중/th/w2/coverage 그리드→사전등록 최적점 1발) → D-3 klue@384 fold0(조건부) → D-2 동결 → D-1 이중은행(은행1=최고LB, 은행2=사전등록 구조상이본). LB예산 ~5-7발.
+주의: 재적합 시 배포멤버 OOF 근사 문제(조원 m1·FULL모델은 클린 OOF 부재 — fold 계열로 프록시) 사전등록에 명시. 매 수 codex+중대판정 독립 레드팀(3자).
 ```
