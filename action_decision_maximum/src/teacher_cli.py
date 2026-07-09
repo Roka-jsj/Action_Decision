@@ -228,6 +228,10 @@ for fi in range(FOLD_LO, FOLD_HI):
         pick = smf1 if SELECT_SIM else mf1
         if pick > best:
             best = pick; bva = pv; bho = infer_probs(model, hold_idx)
+            # 에폭 단위 증분 보존 — 컨테이너/세션 사망 시 fold 미완이어도 best 확률 회수 가능 (07-09 kfdeb 5.8h 유실 재발방지)
+            np.savez_compressed(os.path.join(WORK, f"teacher_{TAG}_partial.npz"),
+                                oof_va=bva, va_idx=np.asarray(va), hold=bho,
+                                best=best, epoch=ep + 1, fold=fi)
         if ema is not None:   # EMA 가중치로도 평가 (패시브 — 학습에 무영향)
             bak = {n: p.detach().clone() for n, p in model.named_parameters() if n in ema}
             with torch.no_grad():
