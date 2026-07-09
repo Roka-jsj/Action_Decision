@@ -335,3 +335,8 @@
 - **codex R40 포트폴리오**: GPU0 1순위 = **v6-large 12ep noFGM fold0 수렴 프로브**(mdeb 12ep 도약의 xlm 버전 검증 — Green ≥+0.0040 vs fold0 6ep 0.7485 → m1 전면 업그레이드 / Yellow +0.0020~40 / Red <+0.0020 농사 중단. FGM은 noFGM Yellow+일 때만 분리 진단). 2순위 mdeb777, 3순위 v4 신시드. deberta-v3-en·koelectra·klue는 GPU0 배정 금지. int4 실패 시 "top3 교체 가능 재고"만 농사.
 - 충돌 규율: 산출물 prefix 분리·cascade config 불변 파일·최종제출 단일소유 규칙.
 - NVML 2차 사망 — CUDA 복구 감시자(체인: v6 12ep 프로브→mdeb777 FULL) 재무장. docker restart 대기.
+
+## R41 준비 — 조원 R67~R69 정독 + int4 재판정 대기 (07-09 오후)
+- **조원 신정보**: klue-large fold0 **0.7446 완주**(m1급 -0.004, 이종 강멤버). kf-deberta-base 발견(YNAT 87.51, 차기 프로브). koelectra 병행. **조원 codex의 int4 기각은 문헌 근거(auto-gptq 미지원·bnb 의존·PTQ 0.3~1pt)** — 우리 구현(group-64 weight-only·메모리 내 fp16 복원·의존성 0, 검증된 int8과 동일 경로)에는 부적용. 유효한 우려는 "저마진 argmax 뒤집힘"뿐 → parity 게이트로 실측 판정.
+- **용량 프론티어 대조**: 조원 소형-ko fp16 노선은 1GB 재초과(m1+mdeb+koelectra+kfdeb≈1.1GB). **우리 int4 통과 시 전 멤버 805MB 수납** — 두 트랙 곱셈 가능.
+- GPU0 = 사용자 타대회 학습 점유(오인 정정: 조원 아님). 대기열 재구성: 유휴 → **parity 2건(mdeb·m1, 사전등록 게이트: argmax≥99.3%·ΔF1≥-0.0005·저마진 flip≤3%·14클래스)** → v6 12ep fold0 → mdeb777.
