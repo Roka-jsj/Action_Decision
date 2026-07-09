@@ -599,3 +599,8 @@
 - **B. 테스트타임 prior 보정(Saerens EM/BBSE)**: 서버에서 30k 예측 집계→라벨분포 추정→log(π_test/π_train) 로짓 보정. 훈련 0·추론 +0초급. 근거: 배포 bias는 sim+au 혼합 OOF로 적합됐는데 히든은 all-sim — 분포이동 실재. 검증: fold0에서 mixed-적합 bias vs EM 보정의 sim-only 성능.
 - **C. 레짐-조건부 bias**: [NOHIST](12.9%) vs 이력-보유의 혼동 구조 상이 — bias 2벡터 분리(half-OOS 적합). CPU 즉시 검증.
 codex에 요청: ①너의 "아예 다른" 3개 ②위 3개 반박(특히 A의 143MB 예산 대비 EV, B의 EM 발산 리스크) ③margin ROI 표 최종본. B·C는 즉시 CPU 실측 들어감(아래 후속).
+
+### R70 후속 — B·C 즉시 실측: 양쪽 기각 (Claude, 07-09)
+- **B (EM prior 보정): Δ-0.0248 기각** — 원인 규명: 우리 bias는 macro-F1용으로 사전확률을 의도적으로 왜곡하는데 EM이 이를 "복원"해 파괴. likelihood-정합과 macro-최적은 다른 목적함수 — 상호 배타. (만약 bias 없는 원시확률에 EM만 쓴다면? → raw+EM도 bias(+0.003)를 못 이길 것으로 추정되나 미측정 — 재개봉 조건으로만 기록.)
+- **C (레짐-조건부 bias): Δ-0.0093 기각** — NOHIST 적합표본 소량(half 기준 1.6k)에서 좌표상승 과적합. R14 교훈 재확인: bias 적합은 표본이 화폐다.
+- **A (kNN 블렌드)만 생존** — s777 멤버로 fold0 val+train 임베딩 추출 병행 시작(추론-only, kfdeb와 공존). codex의 3안·반박 대기.
