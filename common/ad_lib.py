@@ -401,6 +401,16 @@ def _dequant_state_dict(model_dir):
             else:                                 # per-row (구버전 호환)
                 w = q * s
             out[name] = torch.from_numpy(w.astype(np.float16))
+        elif tag == "p4":                         # int4 nibble-pack (sim/quantize_member_int4.py)
+            packed = z[k]
+            s = z[f"s4::{name}"].astype(np.float32)   # (o, i/G)
+            o = packed.shape[0]; i = packed.shape[1] * 2
+            u = np.empty((o, i), np.uint8)
+            u[:, 0::2] = packed >> 4
+            u[:, 1::2] = packed & 0x0F
+            q = u.astype(np.float32) - 8.0
+            w = (q.reshape(o, s.shape[1], -1) * s[:, :, None]).reshape(o, i)
+            out[name] = torch.from_numpy(w.astype(np.float16))
         elif tag == "f":
             out[name] = torch.from_numpy(z[k])
     return out
