@@ -618,3 +618,14 @@ codex에 요청: ①너의 "아예 다른" 3개 ②위 3개 반박(특히 A의 1
 - **단, 축 자체는 사망 아님**: 배포 상황(히든 30k=미학습 쿼리, train=참조셋)은 구조가 다름 — 미학습 쿼리 임베딩이 동라벨 train 근처에 떨어지는지가 진짜 질문. 정직 검증엔 **fold0-val을 안 본 임베더**가 필요한데 teacher는 가중치를 안 남김.
 - **정직 검증 계획**: teacher_cli에 AD_SAVE_WEIGHTS(fold 모델 저장) 패치 → kfdeb 완주 후 대형 레인에 **xlm-r-large fold0-train 전용 임베더**(8ep, ~4h) 학습 — kfdeb FULL(base 레인)과 병행. 내일 아침 honest kNN 판정(사전등록: 블렌드 Δ≥+0.0015 → 배포 설계[임베딩 PCA-256≈36MB 번들, T4 matmul ~1분]).
 - codex 반박 요청: ①이 누수 진단에 동의? ②honest 임베더에 4h를 쓸 가치(대안: 순수 사전학습 임베더로 하한 먼저 측정 — 20분)?
+
+## R74 — Codex 응답: kNN 누수 진단 수용, 사전학습 하한 먼저 (codex, 07-09)
+- **판정**: 누수 진단에 동의한다. 현재 `emb_s777_fold0.npz`는 FULL s777 계열에서 뽑힌 fold0 train/val 임베딩이고, 쿼리 fold0-val이 임베더 학습에 이미 포함됐으므로 half-OOS kNN은 OOS가 아니다. kNN 단독 `0.8016`이 원 모델 `0.7645`를 +0.037 이기는 모양은 배포 신호가 아니라 라벨 클러스터 암기 신호로 보는 게 맞다.
+- **반박**: 바로 4h honest 임베더로 가는 것은 아직 비싸다. `work/GPU_LOCK`은 현재 `cc_kfdeb_f0` base이고 kfdeb도 ep3 `sim=0.6910` 진행 중이라, 새 대형 4h는 kfdeb OOF/조합판정 뒤에만 의미가 있다. 먼저 순수 사전학습 xlm-r-large 임베더로 `reference=fold0-train`, `query=fold0-val` 하한을 20분 안에 재면, 검색 축이 데이터 구조 자체에서 먹는지 최소한 확인할 수 있다.
+- **사전등록 제안**: 사전학습 하한이 no-op 포함 half-OOS에서 `tri_mdeb` 대비 블렌드 Δ가 `+0.0005`도 안 되거나 탐색4/14클래스 손상이 크면 honest 4h는 보류한다. 하한이 약양수이고 크기/시간 산술도 통과하면 그때 `AD_SAVE_WEIGHTS` 패치 후 fold0-train 전용 임베더 1회만 승인한다. α/k/PCA 차원은 half-OOS에서 고정하고 eval split 재튜닝 금지.
+- **패키징 가드**: 현재 임베딩 npz도 116MB라 `submit_cc_tri_mdeb` 0.955GB에 단순 추가는 불가하다. PCA-256 36MB와 T4 1분은 아직 설계 추정치이므로, honest Δ가 PASS해도 zip 크기, 빈 requirements, numpy/PyTorch matmul 구현, `30k×3.21≤540s`, 14클래스 발화까지 새 후보별로 다시 통과해야 한다.
+- **다음 액션**: GPU 새 학습 없음. kfdeb OOF와 사전학습 kNN 하한 표를 먼저 보고, 둘 중 하나라도 은행 갱신 프록시가 없으면 kNN 4h 학습보다 CPU char-ngram expert/제한 gate 쪽으로 슬롯을 돌리자.
+
+### R72 — kNN 정직 하한: Δ-0.0003 — 축 보류 (Claude, 07-09 밤)
+- raw(사전학습, 라벨 무접촉) 임베더: kNN 단독 **0.2024**, 블렌드 half-OOS **Δ-0.0003**. 누수 상한(+0.018)과의 거대한 간극 = 파인튜닝 임베더의 클러스터링이 압도적으로 라벨-암기 유래라는 뜻.
+- **중복성 추론(reranker 전례와 동형)**: 미학습 쿼리에 대해 파인튜닝-임베더 kNN은 분류기 head가 이미 계산하는 것(클래스 프로토타입 유사도)을 재유도 — honest 이득은 bias/reranker처럼 중복으로 수렴할 개연성. 4h honest-임베더 슬롯은 **보류**(codex가 반박하면 재개봉). 대형 레인은 kfdeb D/F 판정의 해상도(필요시 fold1 확장)에 우선 배정.
