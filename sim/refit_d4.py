@@ -126,6 +126,9 @@ def run_probes(y, folds, fmap, members, old_bias, eps=L.EPS_DEPLOY):
 
     f_base = F(L.C0_BASE_W, L.C0_BASE_TH)
     f_wd30 = F(L.ANCHOR_W, L.ANCHOR_TH)
+    f_cw45 = F((0.45, 0.35, 0.20), 0.6)
+    P_tt30, _ = L.cascade_probs(mems, L.TT30_W, L.TT30_TH, stages=L.TT30_STAGES)
+    f_tt30 = L.score(P_tt30, old_bias, yb, eps)
     checks = [
         ("wk30 (0.55/0.15/0.30 th0.5)", F((0.55, 0.15, 0.30), 0.5) - f_base,
          lambda d: d < 0, "음수"),
@@ -133,8 +136,10 @@ def run_probes(y, folds, fmap, members, old_bias, eps=L.EPS_DEPLOY):
          lambda d: d > 0, "양수"),
         ("wd30 (0.55/0.30/0.15 th0.5)", f_wd30 - f_base,
          lambda d: d > 0, "양수"),
-        ("cw45 (0.45/0.35/0.20 th0.6) vs wd30", F((0.45, 0.35, 0.20), 0.6) - f_wd30,
+        ("cw45 (0.45/0.35/0.20 th0.6) vs wd30", f_cw45 - f_wd30,
          lambda d: 0.0010 <= d <= 0.0035, "+0.002대"),
+        ("tt30 (2단 t1=0.3 wd0.40/0.35/0.25) vs cw45", f_tt30 - f_cw45,
+         lambda d: 0.0005 <= d <= 0.0015, "+0.00091 인근"),
     ]
     all_ok = True
     lines = [f"C0 base F1={f_base:.5f}, wd30 anchor F1={f_wd30:.5f}"]

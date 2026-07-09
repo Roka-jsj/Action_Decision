@@ -103,6 +103,115 @@ def test_cascade_equals_ad_lib_conditional():
         ad_lib.predict_logits, ad_lib.serialize = orig_pl, orig_ser
 
 
+def _fake_ad_lib(probs, id2row):
+    """ad_lib predict_logits/serialize monkeypatch 컨텍스트 헬퍼 — 호출 행수도 기록."""
+    calls = {}
+
+    def fake_predict_logits(model_dir, subset, *a, **kw):
+        mi = int(os.path.basename(model_dir).replace("m", ""))
+        rows = [id2row[s["id"]] for s in subset]
+        calls[mi] = calls.get(mi, 0) + len(rows)
+        assert kw.get("return_probs")
+        return probs[mi][rows]
+
+    return fake_predict_logits, calls
+
+
+def test_cascade_stages_equals_ad_lib_tt30():
+    """R51 tt30: 2단 조건부 가중 — ad_lib 신설 경로와 refit_lib 시뮬 배열 단위 동일성
+    + 단일 stage == 기존 단일-th 경로 + cond 추론 행수 불변(시간 영향 0) 증명."""
+    rng = np.random.default_rng(7)
+    n = 1200
+    probs = []
+    for _ in range(3):
+        z = rng.normal(size=(n, 14)).astype(np.float32) * 2
+        e = np.exp(z - z.max(1, keepdims=True))
+        probs.append((e / e.sum(1, keepdims=True)).astype(np.float32))
+    samples = [{"id": f"r{i}"} for i in range(n)]
+    id2row = {f"r{i}": i for i in range(n)}
+    fake, calls = _fake_ad_lib(probs, id2row)
+    orig_pl, orig_ser = ad_lib.predict_logits, ad_lib.serialize
+    ad_lib.predict_logits, ad_lib.serialize = fake, (lambda s, ver: s["id"])
+    try:
+        w, th, cond = (0.45, 0.35, 0.20), 0.6, (1, 2)
+        base = {"ensemble": [{"dir": f"m{i}"} for i in range(3)],
+                "weights": list(w), "version": "v6", "max_len": 320, "batch_size": 128}
+        stage_sets = [
+            list(L.TT30_STAGES),                                    # tt30 본좌표
+            [{"th": 0.6, "weights": [0.45, 0.35, 0.20]},
+             {"th": 0.2, "weights": [0.30, 0.40, 0.30]}],           # 변형 2단
+            [{"th": 0.3, "weights": [0.40, 0.35, 0.25]}],           # 부분단(얕은 행은 1단 가중? -> 미커버 행 p_full 유지)
+        ]
+        for stages in stage_sets:
+            meta = dict(base, conditional={"margin_th": th, "cond_members": list(cond),
+                                           "stages": [dict(s) for s in stages]})
+            ref = ad_lib.predict_conditional_probs("/fake", samples, meta)
+            mine, _ = L.cascade_probs(probs, w, th, cond, stages=stages)
+            assert np.allclose(ref, mine, atol=1e-7, rtol=0), f"stages 불일치: {stages}"
+        # 단일 stage(th=margin_th, weights=top-level) == 기존 단일-th 경로 (수치 동일)
+        meta1 = dict(base, conditional={"margin_th": th, "cond_members": list(cond),
+                                        "stages": [{"th": th, "weights": list(w)}]})
+        meta0 = dict(base, conditional={"margin_th": th, "cond_members": list(cond)})
+        p1 = ad_lib.predict_conditional_probs("/fake", samples, meta1)
+        p0 = ad_lib.predict_conditional_probs("/fake", samples, meta0)
+        assert np.allclose(p0, p1, atol=1e-7, rtol=0), "단일 stage != 기존 경로"
+        # cond 추론 행수 불변 (staged vs plain): m1은 전행, cond 멤버는 게이트행만 — 동일
+        calls.clear()
+        ad_lib.predict_conditional_probs("/fake", samples, meta0)
+        plain_calls = dict(calls)
+        calls.clear()
+        metaT = dict(base, conditional={"margin_th": th, "cond_members": list(cond),
+                                        "stages": [dict(s) for s in L.TT30_STAGES]})
+        ad_lib.predict_conditional_probs("/fake", samples, metaT)
+        assert calls == plain_calls, f"추론 행수 변화(시간 영향): {plain_calls} -> {calls}"
+    finally:
+        ad_lib.predict_logits, ad_lib.serialize = orig_pl, orig_ser
+
+
+def test_stages_th_guard():
+    """stage th > margin_th 는 게이트 밖 행(cond 미추론)이라 거부되어야 함."""
+    rng = np.random.default_rng(3)
+    P = [rng.dirichlet(np.ones(14), size=50).astype(np.float32) for _ in range(3)]
+    bad = [{"th": 0.7, "weights": [0.45, 0.35, 0.20]}]
+    caught = False
+    try:
+        L.cascade_probs(P, (0.45, 0.35, 0.20), 0.6, (1, 2), stages=bad)
+    except AssertionError:
+        caught = True
+    assert caught, "stage th > margin_th 가 통과됨"
+
+
+def test_tt30_fold0_redteam_reproduction():
+    """tt30 클린 델타(레드팀 R51 실측 +0.00091 vs cw45) 재현 + 실데이터에서
+    ad_lib 신설 경로와 시뮬의 예측 완전 일치."""
+    y, folds, fmap, members, old_bias = _materials()
+    rows = np.sort(folds[0][1])
+    mems = [m.oof[rows] for m in members]
+    yb = y[rows]
+    P_cw, _ = L.cascade_probs(mems, (0.45, 0.35, 0.20), 0.6)
+    P_tt, _ = L.cascade_probs(mems, L.TT30_W, L.TT30_TH, stages=L.TT30_STAGES)
+    f_cw = L.score(P_cw, old_bias, yb)
+    f_tt = L.score(P_tt, old_bias, yb)
+    d = f_tt - f_cw
+    assert 0.0005 <= d <= 0.0015, f"tt30 fold0 Δ{d:+.5f} — 레드팀 +0.00091 재현 실패"
+    # 실데이터 배열로 ad_lib 신설 경로 대조 (monkeypatch)
+    samples = [{"id": f"r{i}"} for i in range(len(rows))]
+    id2row = {f"r{i}": i for i in range(len(rows))}
+    fake, _ = _fake_ad_lib(mems, id2row)
+    orig_pl, orig_ser = ad_lib.predict_logits, ad_lib.serialize
+    ad_lib.predict_logits, ad_lib.serialize = fake, (lambda s, ver: s["id"])
+    try:
+        meta = {"ensemble": [{"dir": f"m{i}"} for i in range(3)],
+                "weights": list(L.TT30_W), "version": "v6",
+                "conditional": {"margin_th": L.TT30_TH, "cond_members": [1, 2],
+                                "stages": [dict(s) for s in L.TT30_STAGES]}}
+        ref = ad_lib.predict_conditional_probs("/fake", samples, meta)
+    finally:
+        ad_lib.predict_logits, ad_lib.serialize = orig_pl, orig_ser
+    assert np.allclose(ref, P_tt, atol=1e-7, rtol=0)
+    assert np.array_equal(L.bias_argmax(ref, old_bias), L.bias_argmax(P_tt, old_bias))
+
+
 def test_bias_argmax_equals_deploy_formula():
     """ad_lib.predict() L847(scores=log(probs+1e-9)) + L902(pred=(scores+bias).argmax(1))."""
     rng = np.random.default_rng(1)

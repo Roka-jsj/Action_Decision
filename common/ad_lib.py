@@ -548,12 +548,27 @@ def predict_conditional_probs(model_root, samples, meta, device=None, return_emb
 
     full 멤버들(cond_members 제외)을 전체에 추론·가중혼합 → top1-top2 마진 < margin_th 인
     행만 cond 멤버 추가 추론·재혼합. LB 실측(07-05): 서버 시간예산 large+230s/base+117s.
+
+    conditional["stages"] (R51 tt30, 선택적·하위호환): 다단 조건부 가중.
+      [{"th": 0.6, "weights": [...]}, {"th": 0.3, "weights": [...]}] — th 내림차순으로
+      적용해 깊은 단이 덮어씀. 모든 stage th ≤ margin_th 필수(게이트 밖 행은 cond 미추론).
+      cond 멤버 추론은 margin_th 게이트 1회뿐 — stage 는 가중 재혼합만 하므로 시간 영향 0.
+      stage weights 는 멤버 전체 길이 벡터. full 멤버가 2개 이상이면 full 그룹은 top-level
+      weights 비율의 p_full 을 유지하고 stage 의 full 가중 합(wf_s)으로 스케일된다.
+      "stages" 부재 시 기존 단일-th 경로 그대로(연산 순서 불변 — 기존 패키지 재현 무결).
     """
     import numpy as np
     ens = meta["ensemble"]
     w = meta.get("weights") or [1.0] * len(ens)
     cond = meta["conditional"]
     th = float(cond["margin_th"])
+    stages = cond.get("stages")
+    if stages:
+        stages = sorted(({"th": float(s["th"]), "weights": [float(x) for x in s["weights"]]}
+                         for s in stages), key=lambda s: -s["th"])
+        for s in stages:
+            assert len(s["weights"]) == len(ens), "stage weights 길이 != 멤버수"
+            assert s["th"] <= th + 1e-9, "stage th > margin_th (게이트 밖 행은 cond 추론이 없음)"
     cond_idx = set(cond.get("cond_members", [len(ens) - 1]))   # 기본: 마지막 멤버만 조건부
     base_ver = meta.get("version", "v4")
     ml, bs = meta.get("max_len", 320), meta.get("batch_size", 128)
@@ -592,12 +607,29 @@ def predict_conditional_probs(model_root, samples, meta, device=None, return_emb
     out = p_full.copy()
     if len(sel):
         sub = [samples[i] for i in sel]
-        acc = wf * p_full[sel]
-        wt = wf
-        for mi in sorted(cond_idx):
-            acc = acc + w[mi] * run(mi, sub, tcache)
-            wt += w[mi]
-        out[sel] = acc / wt
+        if stages:
+            # 다단 가중(R51): cond 멤버 추론은 1회, stage 별로 가중 재혼합만.
+            marg_sel = (srt[:, -1] - srt[:, -2])[sel]
+            cond_p = {mi: run(mi, sub, tcache) for mi in sorted(cond_idx)}
+            for st in stages:                      # 넓은 th → 좁은 th (깊은 단이 덮어씀)
+                rr = np.where(marg_sel < st["th"])[0]
+                if not len(rr):
+                    continue
+                sw = st["weights"]
+                wf_s = sum(sw[i] for i in full_idx)
+                acc = wf_s * p_full[sel[rr]]
+                wt = wf_s
+                for mi in sorted(cond_idx):
+                    acc = acc + sw[mi] * cond_p[mi][rr]
+                    wt += sw[mi]
+                out[sel[rr]] = acc / wt
+        else:
+            acc = wf * p_full[sel]
+            wt = wf
+            for mi in sorted(cond_idx):
+                acc = acc + w[mi] * run(mi, sub, tcache)
+                wt += w[mi]
+            out[sel] = acc / wt
     if return_emb_member is not None:
         return out, emb_out
     return out

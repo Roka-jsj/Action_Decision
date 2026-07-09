@@ -50,6 +50,13 @@ TH_GRID = (0.45, 0.5, 0.55, 0.6)
 LAMBDA_GRID = (0.5, 0.7, 1.0)          # bias shrink: b = old + λ(fit-old)
 TEMP_GRID = (0.8, 0.9, 1.0, 1.1, 1.25)  # per-member temperature(자유도 최소)
 
+# tt30 (R51 아침 큐 4번 후보) — cw45 앵커 + deep-margin 2단 가중 (레드팀 fold0 +0.00091).
+# 주의: grid_hash 페이로드 밖의 별도 후보 상수(기존 해시 불변). 발사는 3자 서명 후.
+TT30_W = (0.45, 0.35, 0.20)   # top-level weights = cw45 (게이트·1단)
+TT30_TH = 0.6                 # margin_th = cw45 (cond 추론 행 동일 → 시간 영향 0)
+TT30_STAGES = ({"th": 0.6, "weights": (0.45, 0.35, 0.20)},
+               {"th": 0.3, "weights": (0.40, 0.35, 0.25)})
+
 # 배포 수식 상수: ad_lib.predict() L847 scores = log(probs + 1e-9)
 EPS_DEPLOY = 1e-9
 # 레드팀 D12 재현용: redteam_sim*.py 는 log(P + 1e-12)
@@ -199,27 +206,53 @@ def usable_folds(members, folds):
 # ---------------------------------------------------------------------------
 # 캐스케이드 시뮬 — ad_lib.predict_conditional_probs L586-600 미러
 # ---------------------------------------------------------------------------
-def cascade_probs(mems, w, th, cond_members=COND_MEMBERS):
+def cascade_probs(mems, w, th, cond_members=COND_MEMBERS, stages=None):
     """mems: [(n,14) 확률배열,...] (동일 행 슬라이스). ad_lib 과 동일 연산 순서.
 
     full 멤버 가중혼합 -> top1-top2 마진 < th 행만 cond 멤버 추가 혼합.
+    stages(R51 tt30, 선택적): [{"th":0.6,"weights":[...]},{"th":0.3,"weights":[...]}] —
+    ad_lib 의 다단 조건부 가중과 동일 수식(th 내림차순 덮어쓰기, cond 추론 행은
+    margin_th 게이트 1회 그대로 → 시간 영향 0).
     반환 (P, sel_mask).
     """
     cond_idx = set(int(i) for i in cond_members)
     full_idx = [i for i in range(len(mems)) if i not in cond_idx]
     assert full_idx, "full 멤버 없음"
+    if stages:
+        stages = sorted(({"th": float(s["th"]), "weights": [float(x) for x in s["weights"]]}
+                         for s in stages), key=lambda s: -s["th"])
+        for s in stages:
+            assert len(s["weights"]) == len(mems), "stage weights 길이 != 멤버수"
+            assert s["th"] <= float(th) + 1e-9, "stage th > margin_th"
     wf = sum(w[i] for i in full_idx)
     p_full = sum(w[i] * mems[i] for i in full_idx) / wf
     srt = np.sort(p_full, axis=1)
     sel = (srt[:, -1] - srt[:, -2]) < th
     out = p_full.copy()
     if sel.any():
-        acc = wf * p_full[sel]
-        wt = wf
-        for mi in sorted(cond_idx):
-            acc = acc + w[mi] * mems[mi][sel]
-            wt += w[mi]
-        out[sel] = acc / wt
+        if stages:
+            sel_i = np.where(sel)[0]
+            marg_sel = (srt[:, -1] - srt[:, -2])[sel_i]
+            cond_p = {mi: mems[mi][sel_i] for mi in sorted(cond_idx)}
+            for st in stages:                  # 넓은 th → 좁은 th (깊은 단이 덮어씀)
+                rr = np.where(marg_sel < st["th"])[0]
+                if not len(rr):
+                    continue
+                sw = st["weights"]
+                wf_s = sum(sw[i] for i in full_idx)
+                acc = wf_s * p_full[sel_i[rr]]
+                wt = wf_s
+                for mi in sorted(cond_idx):
+                    acc = acc + sw[mi] * cond_p[mi][rr]
+                    wt += sw[mi]
+                out[sel_i[rr]] = acc / wt
+        else:
+            acc = wf * p_full[sel]
+            wt = wf
+            for mi in sorted(cond_idx):
+                acc = acc + w[mi] * mems[mi][sel]
+                wt += w[mi]
+            out[sel] = acc / wt
     return out, sel
 
 
