@@ -434,6 +434,15 @@ def _load_model_maybe_quant(model_dir):
     return model
 
 
+def _member_mht(member):
+    """멤버별 max_hist_turns (R62 m1-T3 서빙 정합). 멤버 레벨만 허용 — meta 레벨 fallback 금지
+    (최상위 오기 한 줄이 전 멤버를 오염시키는 footgun, codex R63). 허용값 {8, 12}."""
+    mht = member.get("mht", 8)
+    if mht not in (8, 12):
+        raise ValueError(f"member mht={mht!r} 미허용 (8 또는 12만)")
+    return int(mht)
+
+
 def _gen_rescue_ids(tok, texts, max_len):
     """GEN-rescue(R53): 좌측절단으로 [GEN] 헤더가 삭제될 행만 헤더보존 input_ids 재구성.
 
@@ -630,7 +639,7 @@ def predict_ensemble_probs(model_root, samples, meta, device=None, return_member
     for mi, member in enumerate(meta["ensemble"]):
         mdir = os.path.join(model_root, member["dir"])
         ver = member.get("version", base_ver)
-        mht = int(member.get("mht", meta.get("mht", 8)))
+        mht = _member_mht(member)
         ck = (ver, mht)
         if ck not in cache:
             cache[ck] = [serialize(s, ver, mht) for s in samples]
@@ -705,7 +714,7 @@ def predict_conditional_probs(model_root, samples, meta, device=None, return_emb
         nonlocal emb_out
         m = ens[mi]
         ver = m.get("version", base_ver)
-        mht = int(m.get("mht", meta.get("mht", 8)))   # R62 m1-T3: hist12 학습멤버 서빙 정합 — opt-in
+        mht = _member_mht(m)   # R62 m1-T3: hist12 학습멤버 서빙 정합 — opt-in
         ck = (ver, mht)
         if ck not in texts_cache:
             texts_cache[ck] = {}
@@ -731,9 +740,8 @@ def predict_conditional_probs(model_root, samples, meta, device=None, return_emb
                               return_probs=True, gen_rescue=gr, rescue_rows_out=rro)
 
     tta = meta.get("compress_tta")   # R55 D1: {"lambda":0.5,"margin_th":0.5,("members":[...])}
-    if tta:
-        assert all(int(m.get("mht", meta.get("mht", 8))) == 8 for m in ens), \
-            "compress_tta 와 멤버 mht!=8 동시 사용 미지원(R62 스코프)"
+    if tta and any(_member_mht(m) != 8 for m in ens):
+        raise ValueError("compress_tta 와 멤버 mht!=8 동시 사용 미지원(R62 스코프)")
     _rescue_rows = {} if tta else None
     full_idx_pre = [i for i in range(len(ens)) if i not in cond_idx]
     full_gate_mi = full_idx_pre[0] if full_idx_pre else -1

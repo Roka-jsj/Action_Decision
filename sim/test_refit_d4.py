@@ -501,14 +501,26 @@ def test_member_mht_override():
               "weights": [0.45, 0.40, 0.15], "version": "v6", "max_len": 320}
         ad_lib.predict_ensemble_probs("/fake", samples, pe)
         assert texts_seen[0] == {"h12"} and texts_seen[1] == {"h8"} and texts_seen[2] == {"h8"}
-        # compress_tta 동시사용 가드
+        # compress_tta 동시사용 가드 (ValueError — python -O 에서도 생존, codex R63)
         bad = {**base, "compress_tta": {"lambda": 0.5, "margin_th": 0.5}}
         caught = False
         try:
             ad_lib.predict_conditional_probs("/fake", samples, bad)
-        except AssertionError:
+        except ValueError:
             caught = True
         assert caught, "compress_tta+mht 가드 미발동"
+        # 허용값 밖 mht 거부
+        caught = False
+        try:
+            ad_lib.predict_conditional_probs("/fake", samples,
+                {**base, "ensemble": [{"dir": "m0", "mht": 16}, {"dir": "m1"}, {"dir": "m2"}]})
+        except ValueError:
+            caught = True
+        assert caught, "mht=16 통과됨"
+        # meta 레벨 mht 는 무시(멤버 레벨만) — 전멤버 오염 footgun 차단
+        texts_seen.clear()
+        ad_lib.predict_conditional_probs("/fake", samples, {**no, "mht": 12})
+        assert texts_seen[0] == texts_seen[1] == texts_seen[2] == {"h8"}, "meta mht 가 멤버에 전파됨"
     finally:
         ad_lib.predict_logits, ad_lib.serialize = orig_pl, orig_ser
 
