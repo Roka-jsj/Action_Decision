@@ -45,9 +45,12 @@ SOFT = os.environ.get("AD_SOFT", "")            # teacher 소프트라벨 npz(pr
 SOFT_W = float(os.environ.get("AD_SOFT_W", "0.3"))   # loss = (1-w)*CE(hard) + w*KL(soft, T)
 SOFT_T = float(os.environ.get("AD_SOFT_T", "2.0"))
 FGM_ON = os.environ.get("AD_FGM", "0") == "1"   # 임베딩 적대교란 (R36: mdeberta 12ep 레시피 필수)
+GEN_RESCUE = os.environ.get("AD_GEN_RESCUE", "0") == "1"  # R55 T3: 헤더보존 절단(배포 동일 함수)
+MHT = int(os.environ.get("AD_MHT", "8"))                  # serialize max_hist_turns (기본 8=기존)
 device = "cuda"; assert torch.cuda.is_available()
 print(f"[full] {TAG}: {MODEL} v={VERSION} len={MAX_LEN} ep={EPOCHS} lr={LR} b={BATCH} prune={PRUNE}"
       + f" sess_bal={SESS_BAL or 'off'} init_from={INIT_FROM or 'hub'} fgm={FGM_ON}"
+      + f" gen_rescue={GEN_RESCUE} mht={MHT}"
       + (f" distill(w={SOFT_W},T={SOFT_T})" if SOFT else ""), flush=True)
 if SESS_BAL not in ("", "weight", "sample"):
     raise ValueError(f"AD_SESSION_BALANCED must be '', 'weight', or 'sample' (got {SESS_BAL!r})")
@@ -100,11 +103,18 @@ if AUG == "histdrop":
     y = np.concatenate([y, np.array(aug_y, dtype=y.dtype)])
     print(f"[aug:histdrop] +{len(aug_s)}행 증강 → 총 {len(samples)}행 (ratio={ratio})", flush=True)
 
+# R55 T3-FULL: rescue-정합 토큰화 — teacher_cli 와 동일 패턴(배포 gen_rescue 함수 재사용).
+# 기본 off = 기존과 byte 동일. id_map 리매핑보다 반드시 먼저 적용(rescued ids = full-vocab).
 SRC = INIT_FROM if INIT_FROM else MODEL
 tok = AutoTokenizer.from_pretrained(SRC); tok.truncation_side = "left"
-texts = [ad_lib.serialize(s, VERSION) for s in samples]
+texts = [ad_lib.serialize(s, VERSION, MHT) for s in samples]
 enc_all = tok(texts, truncation=True, max_length=MAX_LEN, padding=False)
 INPUT_IDS = enc_all["input_ids"]
+if GEN_RESCUE:
+    _resc = ad_lib._gen_rescue_ids(tok, texts, MAX_LEN)
+    for _i, _ids in _resc.items():
+        INPUT_IDS[_i] = _ids
+    print(f"[gen_rescue] {len(_resc)}/{len(texts)} rows header-preserved (mht={MHT})", flush=True)
 # vocab-pruned 체크포인트 FT: 토크나이저는 원본 id를 내므로 id_map으로 compact id 리매핑 필수
 ID_MAP_PATH = os.path.join(SRC, "id_map.npy") if INIT_FROM else ""
 if ID_MAP_PATH and os.path.exists(ID_MAP_PATH):

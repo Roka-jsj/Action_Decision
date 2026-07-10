@@ -462,6 +462,25 @@ def test_member_th_asymmetric_coverage():
         ad_lib.predict_logits, ad_lib.serialize = orig_pl, orig_ser
 
 
+def test_train_full_cli_rescue_wiring():
+    """R55 T3-FULL: train_full_cli 배선 소스 가드 — ①기본 off(env 기본값 "0"/"8")
+    ②rescue 패치가 id_map 리매핑보다 앞 ③serialize에 MHT 전달 (임포트=학습실행이라 소스검사)."""
+    src = open(os.path.join(L.ROOT, "action_decision_maximum", "src", "train_full_cli.py"),
+               encoding="utf-8").read()
+    assert 'os.environ.get("AD_GEN_RESCUE", "0")' in src, "AD_GEN_RESCUE 기본 off 아님"
+    assert 'os.environ.get("AD_MHT", "8")' in src, "AD_MHT 기본 8 아님"
+    assert "ad_lib.serialize(s, VERSION, MHT)" in src, "serialize에 MHT 미전달"
+    i_resc = src.find("_gen_rescue_ids(tok, texts, MAX_LEN)")
+    i_idmap = src.find("id_map.npy")
+    assert 0 < i_resc < i_idmap, "rescue 패치가 id_map 리매핑보다 뒤 — full-vocab ids 순서 위반"
+    # teacher_cli 동일 가드
+    src_t = open(os.path.join(L.ROOT, "action_decision_maximum", "src", "teacher_cli.py"),
+                 encoding="utf-8").read()
+    assert 'os.environ.get("AD_GEN_RESCUE", "0")' in src_t
+    assert 'os.environ.get("AD_MHT", "8")' in src_t
+    assert "ad_lib.serialize(s, VERSION, MHT)" in src_t
+
+
 def test_serialize_compress_real():
     """serialize_compress 실데이터: <=keep 보장·[GEN]/[CUR]/[SEQ] 보존 (이분탐색 경계 검증)."""
     ckpt = os.path.join(L.ROOT, "work", "foldckpt_largev6_f0ckpt_f0")
