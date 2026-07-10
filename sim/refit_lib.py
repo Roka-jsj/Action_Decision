@@ -57,6 +57,27 @@ TT30_TH = 0.6                 # margin_th = cw45 (cond 추론 행 동일 → 시
 TT30_STAGES = ({"th": 0.6, "weights": (0.45, 0.35, 0.20)},
                {"th": 0.3, "weights": (0.40, 0.35, 0.25)})
 
+# --- R54 T5-light: rescue 기준 재적합 (genrescue 배포 LB 0.78985 후 — 구입력 그리드 낡음) ---
+# 주판정 = fold0-rescue OOF(m1 8ep f0ckpt 재추론), veto = folds1-4 구입력 + 이중 L-프록시(v8/v9).
+# 그리드 = 레드팀 T5(redteam_t1.py) 사전등록본 그대로. grid_hash 페이로드 밖(별도 해시).
+RESCUE_ANCHOR_W = (0.45, 0.40, 0.15)   # 배포 genrescue = th75 좌표 (신규 앵커)
+RESCUE_ANCHOR_TH = 0.75
+W_GRID_R54 = ((0.45, 0.40, 0.15), (0.45, 0.35, 0.20), (0.55, 0.30, 0.15),
+              (0.50, 0.35, 0.15), (0.40, 0.40, 0.20))
+TH_GRID_R54 = (0.5, 0.6, 0.75)
+GATE_R54_PRIMARY = +0.0010    # 주판정: fold0-rescue ΔF1 최소선 (codex R54b 문안)
+GATE_R54_OUTLIER = -0.0020    # veto: folds1-4 음수 outlier 제외선 (엔지니어 기본값, 3자 조정 가능)
+
+
+def rescue_grid_hash() -> str:
+    payload = json.dumps({
+        "W_GRID_R54": W_GRID_R54, "TH_GRID_R54": TH_GRID_R54,
+        "RESCUE_ANCHOR_W": RESCUE_ANCHOR_W, "RESCUE_ANCHOR_TH": RESCUE_ANCHOR_TH,
+        "GATE_R54_PRIMARY": GATE_R54_PRIMARY, "GATE_R54_OUTLIER": GATE_R54_OUTLIER,
+    }, sort_keys=True)
+    return hashlib.sha256(payload.encode()).hexdigest()[:16]
+
+
 # 배포 수식 상수: ad_lib.predict() L847 scores = log(probs + 1e-9)
 EPS_DEPLOY = 1e-9
 # 레드팀 D12 재현용: redteam_sim*.py 는 log(P + 1e-12)

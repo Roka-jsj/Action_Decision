@@ -33,10 +33,17 @@ ROOT = L.ROOT
 DEFAULT_M1 = ["work/teacher_largev6_12ep_f0.npz",
               "work/teacher_largev6_12ep_f14.npz"]           # (내일 예정)
 DEFAULT_MDEB = ["work/mdeb12ep_f0.npz",                      # 조원 mdeb-12ep fold0 (docker cp, 읽기전용)
-                "work/mdeb12ep_f14.npz",                     # (내일 낮 예정 — 도착 시 이 이름으로 저장)
+                "work/teacher_mdeb12_f14.npz",               # 우리 농사 folds1-4 (증분 — 실파일명)
+                "work/mdeb12ep_f14.npz",                     # (대안 파일명)
                 "work/teacher_cc_mdeberta12_f14.npz"]        # (대안 파일명)
 DEFAULT_KLUE = ["work/klue_f0.npz",                          # 조원 fold0
-                "work/teacher_klue_f14.npz"]                 # 우리 folds1-4 (농사 증분)
+                "work/teacher_klue_f14.npz"]                 # 우리 folds1-2 (농사 증분)
+
+# R54 T5-light: fold0-rescue 재료 (sim/gen_rescue_oof.py 산출) + veto 프록시
+RESCUE_M1_OLD = "work/m1_f0ckpt_old.npz"        # 8ep f0ckpt 구입력 (동일 추론경로 기준선)
+RESCUE_M1_NEW = "work/m1_f0ckpt_rescue.npz"     # 8ep f0ckpt rescue 입력
+VETO_L_PROXIES = {"v8L": "work/teacher_largev8_f14.npz",     # 이중 L-프록시 (구입력 folds1-4)
+                  "v9L": "work/teacher_largev9_f14.npz"}
 
 # LB 실측 참조(부호 검증용 각주 — 시뮬 게이트에는 미사용)
 # wk30/th55/wd30 은 vs C0(0.78567), cw45 는 vs wd30(0.78621) 델타 — 07-10 판독 0.78655
@@ -376,6 +383,144 @@ def run_smoke25(y, folds, fmap, old_bias, args):
 
 
 # ---------------------------------------------------------------------------
+# rescue — R54 T5-light 2단 게이트 (주판정 fold0-rescue / veto folds1-4 구입력)
+# ---------------------------------------------------------------------------
+def run_rescue(y, folds, fmap, old_bias, eps=L.EPS_DEPLOY, seed=42):
+    """codex R54b 문안: 'fold0-rescue가 주판정, folds1-4는 veto/방향성 장치
+    (구입력 결과로 새 좌표 증명 금지)'. 두 단의 수치를 분리 표기한다."""
+    print("=" * 72)
+    print(f"[rescue] R54 T5-light 2단 게이트 (rescue_grid_hash={L.rescue_grid_hash()}, "
+          f"anchor={L.RESCUE_ANCHOR_W} th{L.RESCUE_ANCHOR_TH}+구bias)")
+    lines = [f"rescue_grid_hash={L.rescue_grid_hash()} | 그리드 = 레드팀 T5 사전등록 5w×3th",
+             f"anchor = 배포 genrescue 좌표 {L.RESCUE_ANCHOR_W} th{L.RESCUE_ANCHOR_TH} + 구bias"]
+    for p in (RESCUE_M1_OLD, RESCUE_M1_NEW):
+        assert os.path.exists(os.path.join(ROOT, p)), \
+            f"{p} 없음 — 먼저 python3 sim/gen_rescue_oof.py 실행"
+
+    # ---- Stage 1: fold0-rescue 주판정 ----
+    m1_new = L.MemberOOF("m1-rescue(8ep f0ckpt)", [os.path.join(ROOT, RESCUE_M1_NEW)], folds, y)
+    m1_old = L.MemberOOF("m1-old(8ep f0ckpt)", [os.path.join(ROOT, RESCUE_M1_OLD)], folds, y)
+    D0 = L.MemberOOF("mdeb12-f0", [os.path.join(ROOT, "work/mdeb12ep_f0.npz")], folds, y)
+    K0 = L.MemberOOF("klue-f0", [os.path.join(ROOT, "work/klue_f0.npz")], folds, y)
+    rows0 = np.sort(folds[0][1])
+    yb0 = y[rows0]
+    memsR = [m1_new.oof[rows0], D0.oof[rows0], K0.oof[rows0]]
+    memsO = [m1_old.oof[rows0], D0.oof[rows0], K0.oof[rows0]]
+    note = ("한계: mdeb12/klue f0 ckpt 미보존(전 컨테이너 수색 07-10) — mdeb/klue 슬롯은 구입력. "
+            "배포는 3멤버 전부 rescue 입력이므로 본 계기판은 m1 채널 효과만 반영(과소추정 방향).")
+    print("  " + note)
+    lines.append(note)
+
+    def surface(mems):
+        P_a, _ = L.cascade_probs(mems, L.RESCUE_ANCHOR_W, L.RESCUE_ANCHOR_TH)
+        f_a = L.score(P_a, old_bias, yb0, eps)
+        out = {}
+        for w in L.W_GRID_R54:
+            for th in L.TH_GRID_R54:
+                P, _ = L.cascade_probs(mems, w, th)
+                out[(w, th)] = L.score(P, old_bias, yb0, eps) - f_a
+        return f_a, out
+
+    faR, dR = surface(memsR)
+    faO, dO = surface(memsO)
+    print(f"  --- Stage1 주판정: fold0-rescue 표면 (anchor F1 rescue {faR:.5f} / 구입력 {faO:.5f}) ---")
+    hdr = f"  {'좌표':<28} {'rescue Δ':>10} {'구입력 Δ':>10}"
+    print(hdr)
+    lines.append("[Stage1 fold0 표면] anchor F1: rescue {:.5f} / 구입력 {:.5f}".format(faR, faO))
+    stage1_pass = []
+    for (w, th), d in sorted(dR.items(), key=lambda kv: -kv[1]):
+        tag = f"w={w} th={th}"
+        row = f"{tag:<28} {d:>+10.5f} {dO[(w, th)]:>+10.5f}"
+        print("  " + row)
+        lines.append("(S1) " + row)
+        if d >= L.GATE_R54_PRIMARY and (w, th) != (L.RESCUE_ANCHOR_W, L.RESCUE_ANCHOR_TH):
+            stage1_pass.append((w, th, d))
+    # 최적점 이동 계기(레드팀 T5 재현): 구입력 vs rescue 그리드 최적 좌표
+    bR = max(dR, key=dR.get)
+    bO = max(dO, key=dO.get)
+    row = f"그리드 최적점: 구입력 {bO} (Δ{dO[bO]:+.5f}) → rescue {bR} (Δ{dR[bR]:+.5f})"
+    print("  " + row)
+    lines.append("(S1) " + row)
+    # half-fit 교차선택 (참고: 좌표 안정성)
+    rs = np.random.RandomState(seed)
+    perm = rs.permutation(len(rows0))
+    hA, hB = perm[:len(perm) // 2], perm[len(perm) // 2:]
+    sel_h = []
+    for fit_i, ev_i in ((hA, hB), (hB, hA)):
+        (w, th), _ = L.search_wth(memsR, yb0, fit_i, old_bias, L.W_GRID_R54, L.TH_GRID_R54, eps)
+        P, _ = L.cascade_probs(memsR, w, th)
+        P_a, _ = L.cascade_probs(memsR, L.RESCUE_ANCHOR_W, L.RESCUE_ANCHOR_TH)
+        dh = (L.score(P[ev_i], old_bias, yb0[ev_i], eps)
+              - L.score(P_a[ev_i], old_bias, yb0[ev_i], eps))
+        sel_h.append(((w, th), dh))
+    row = (f"half-fit 교차선택(참고): {sel_h[0][0]} Δ{sel_h[0][1]:+.5f} / "
+           f"{sel_h[1][0]} Δ{sel_h[1][1]:+.5f}"
+           + (" [동일좌표]" if sel_h[0][0] == sel_h[1][0] else " [좌표 불일치 — 선택노이즈 주의]"))
+    print("  " + row)
+    lines.append("(S1) " + row)
+    row = (f"Stage1 통과({L.GATE_R54_PRIMARY:+.4f} 이상): "
+           + (", ".join(f"w={w} th={th} (Δ{d:+.5f})" for w, th, d in stage1_pass) or "없음"))
+    print("  " + row)
+    lines.append("(S1) " + row)
+
+    # ---- Stage 2: veto (folds1-4 구입력 + 이중 L-프록시) ----
+    print("  --- Stage2 veto: folds1-4 구입력 방향성 (이중 L-프록시, 새 좌표 증명 금지) ---")
+    Df = L.MemberOOF("mdeb12-f14", [os.path.join(ROOT, "work/teacher_mdeb12_f14.npz")], folds, y)
+    Kf = L.MemberOOF("klue-f14", [os.path.join(ROOT, "work/teacher_klue_f14.npz")], folds, y)
+    proxies = {}
+    for pname, ppath in VETO_L_PROXIES.items():
+        proxies[pname] = L.MemberOOF(pname, [os.path.join(ROOT, ppath)], folds, y, proxy=True)
+    veto_folds = sorted(set(Df.folds_covered) & set(Kf.folds_covered)
+                        & set.intersection(*[set(p.folds_covered) for p in proxies.values()])
+                        - {0})
+    row = f"veto 가용 폴드: {veto_folds} (mdeb f14 농사 진행에 따라 자동 확장, 목표 1-4)"
+    print("  " + row)
+    lines.append("(S2) " + row)
+    results = []
+    for w, th, d0 in stage1_pass:
+        per_fold = {}
+        for f in veto_folds:
+            rf = np.sort(folds[f][1])
+            yf = y[rf]
+            ds = {}
+            for pname, pm in proxies.items():
+                mems = [pm.oof[rf], Df.oof[rf], Kf.oof[rf]]
+                P, _ = L.cascade_probs(mems, w, th)
+                P_a, _ = L.cascade_probs(mems, L.RESCUE_ANCHOR_W, L.RESCUE_ANCHOR_TH)
+                ds[pname] = L.score(P, old_bias, yf, eps) - L.score(P_a, old_bias, yf, eps)
+            per_fold[f] = ds
+        # 판정 요소
+        pos_folds = sum(1 for f in veto_folds if all(v > 0 for v in per_fold[f].values()))
+        split = [f for f in veto_folds
+                 if len({v > 0 for v in per_fold[f].values() if abs(v) > 1e-6}) > 1]
+        outlier = [f for f in veto_folds if any(v <= L.GATE_R54_OUTLIER for v in per_fold[f].values())]
+        n = len(veto_folds)
+        need = min(3, n)
+        ok = (n > 0 and pos_folds >= need and not split and not outlier)
+        verdict = "FIRE-ELIGIBLE" if ok else "VETO"
+        why = []
+        if split:
+            why.append(f"부호분열 f{split}")
+        if outlier:
+            why.append(f"outlier(≤{L.GATE_R54_OUTLIER}) f{outlier}")
+        if n and pos_folds < need:
+            why.append(f"방향일치 {pos_folds}/{n} (필요 {need})")
+        if n < 4:
+            verdict += f" (INCOMPLETE {n}/4폴드)"
+        detail = "; ".join(f"f{f}: " + " ".join(f"{pn}{v:+.5f}" for pn, v in per_fold[f].items())
+                           for f in veto_folds) or "폴드 없음"
+        row = (f"w={w} th={th} | S1 Δ{d0:+.5f} | S2 {detail} | "
+               f"동방향양성 {pos_folds}/{n} → {verdict}" + (f" [{', '.join(why)}]" if why else ""))
+        print("  " + row)
+        lines.append("(S2) " + row)
+        results.append({"w": w, "th": th, "s1": d0, "s2": per_fold, "verdict": verdict})
+    if not stage1_pass:
+        lines.append("(S2) Stage1 통과 좌표 없음 — veto 생략, 0발 유지(R54b)")
+        print("  Stage1 통과 좌표 없음 — 0발 유지(R54b)")
+    return {"lines": lines, "stage1_pass": stage1_pass, "results": results}
+
+
+# ---------------------------------------------------------------------------
 def write_report(path, sections):
     with open(path, "w", encoding="utf-8") as f:
         f.write(f"# D-4 클린 앙상블 OOF 재적합 리포트 (refit_d4)\n\n")
@@ -394,7 +539,7 @@ def write_report(path, sections):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--mode", default="all",
-                    choices=["inventory", "probes", "fold0", "refit", "smoke25", "all"])
+                    choices=["inventory", "probes", "fold0", "refit", "smoke25", "rescue", "all"])
     ap.add_argument("--m1", default="")
     ap.add_argument("--mdeb", default="")
     ap.add_argument("--klue", default="")
@@ -443,6 +588,18 @@ def main():
         except AssertionError as e:
             print(f"  smoke25 스킵: {e}")
             sections.append(("smoke25", [f"스킵: {e}"]))
+
+    if args.mode in ("rescue", "all"):
+        try:
+            out = run_rescue(y, folds, fmap, old_bias, eps=args.eps, seed=args.seed)
+            sections.append(("R54 T5-light 2단 게이트 (주판정 fold0-rescue / veto folds1-4)", out["lines"]))
+            if args.mode == "rescue":
+                write_report(os.path.join(ROOT, "work", "refit_rescue_report.md"), sections)
+        except AssertionError as e:
+            print(f"  rescue 스킵: {e}")
+            sections.append(("R54 T5-light", [f"스킵: {e}"]))
+            if args.mode == "rescue":
+                raise
 
     if args.mode in ("refit", "all"):
         sections.append(("내일(D-4) 실행 절차", [

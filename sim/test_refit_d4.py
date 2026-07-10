@@ -333,6 +333,33 @@ def test_shrink_and_temperature():
 def test_grid_hash_stable():
     assert L.grid_hash() == "bc1f671e7f9620c1", (
         "사전등록 그리드 변경 감지 — R49 서명 위반 여부 확인 필요")
+    assert L.rescue_grid_hash() == "a619e74ed3a75dfb", (
+        "R54 rescue 그리드 변경 감지 — 사전등록(레드팀 T5) 위반 여부 확인 필요")
+
+
+def test_rescue_two_stage_smoke():
+    """R54 T5-light 2단 게이트 스모크 — rescue OOF 존재 시 전체 경로 구동.
+
+    ①m1 rescue/old npz 로더 통과(행순서·폴드·F1 정합) ②변경행 == rescue 대상만
+    ③Stage1 표(15좌표)·anchor 좌표 Δ=0 ④Stage2 veto 폴드 자동인식."""
+    p_old = os.path.join(L.ROOT, D.RESCUE_M1_OLD)
+    p_new = os.path.join(L.ROOT, D.RESCUE_M1_NEW)
+    if not (os.path.exists(p_old) and os.path.exists(p_new)):
+        print("skip (rescue OOF 없음 — sim/gen_rescue_oof.py 선행)")
+        return
+    y, folds, fmap, members, old_bias = _materials()
+    out = D.run_rescue(y, folds, fmap, old_bias)
+    # anchor 좌표 자체의 Δ는 정확히 0 (표에서 확인)
+    anchor_line = [ln for ln in out["lines"]
+                   if f"w={L.RESCUE_ANCHOR_W} th={L.RESCUE_ANCHOR_TH}" in ln]
+    assert anchor_line and "+0.00000" in anchor_line[0], "anchor 좌표 Δ != 0"
+    # rescue OOF 무결성: 변경행 ⊆ fold0 va, old/new 커버 동일
+    o = np.load(p_old, allow_pickle=True)["oof"]
+    n = np.load(p_new, allow_pickle=True)["oof"]
+    diff = np.where(np.abs(o - n).max(1) > 0)[0]
+    va0 = set(np.asarray(folds[0][1]).tolist())
+    assert set(diff.tolist()) <= va0, "fold0 밖 행 변경"
+    assert 1000 < len(diff) < 2500, f"변경행 수 이상: {len(diff)} (기대 ~1603)"
 
 
 def test_known_probes():
