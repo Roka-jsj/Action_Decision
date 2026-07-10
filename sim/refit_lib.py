@@ -227,7 +227,7 @@ def usable_folds(members, folds):
 # ---------------------------------------------------------------------------
 # 캐스케이드 시뮬 — ad_lib.predict_conditional_probs L586-600 미러
 # ---------------------------------------------------------------------------
-def cascade_probs(mems, w, th, cond_members=COND_MEMBERS, stages=None):
+def cascade_probs(mems, w, th, cond_members=COND_MEMBERS, stages=None, member_th=None):
     """mems: [(n,14) 확률배열,...] (동일 행 슬라이스). ad_lib 과 동일 연산 순서.
 
     full 멤버 가중혼합 -> top1-top2 마진 < th 행만 cond 멤버 추가 혼합.
@@ -239,6 +239,10 @@ def cascade_probs(mems, w, th, cond_members=COND_MEMBERS, stages=None):
     cond_idx = set(int(i) for i in cond_members)
     full_idx = [i for i in range(len(mems)) if i not in cond_idx]
     assert full_idx, "full 멤버 없음"
+    if member_th:
+        member_th = {int(k): float(v) for k, v in member_th.items()}
+        assert set(member_th) <= cond_idx and not stages
+        assert all(v <= float(th) + 1e-9 for v in member_th.values())
     if stages:
         stages = sorted(({"th": float(s["th"]), "weights": [float(x) for x in s["weights"]]}
                          for s in stages), key=lambda s: -s["th"])
@@ -250,6 +254,20 @@ def cascade_probs(mems, w, th, cond_members=COND_MEMBERS, stages=None):
     srt = np.sort(p_full, axis=1)
     sel = (srt[:, -1] - srt[:, -2]) < th
     out = p_full.copy()
+    if sel.any() and member_th:
+        # R60 S2 미러: 행별 참여집합 재정규 (ad_lib member_th 경로와 동일 수식)
+        sel_i = np.where(sel)[0]
+        marg_sel = (srt[:, -1] - srt[:, -2])[sel_i]
+        acc = wf * p_full[sel_i]
+        wt_row = np.full(len(sel_i), wf, dtype=p_full.dtype)
+        for mi in sorted(cond_idx):
+            rr = np.where(marg_sel < member_th.get(mi, float(th)))[0]
+            if not len(rr):
+                continue
+            acc[rr] = acc[rr] + w[mi] * mems[mi][sel_i[rr]]
+            wt_row[rr] += w[mi]
+        out[sel_i] = acc / wt_row[:, None]
+        return out, sel
     if sel.any():
         if stages:
             sel_i = np.where(sel)[0]

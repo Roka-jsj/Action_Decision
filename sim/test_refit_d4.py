@@ -391,6 +391,77 @@ def test_member_max_len_override():
         ad_lib.predict_logits, ad_lib.serialize = orig_pl, orig_ser
 
 
+def test_member_th_asymmetric_coverage():
+    """R60 S2: member_th 비대칭 커버리지 — ①ad_lib==refit_lib 미러 ②mid-stage 재정규
+    식 (0.45L+0.40D)/0.85 배열 일치(레드팀 식) ③klue 추론행 절감 ④균일 th==기존 경로."""
+    rng = np.random.default_rng(60)
+    n = 900
+    # m1 마진이 0~1 전대역에 퍼지도록 로짓 스케일 부여 (low/mid/게이트밖 3구간 모두 채움)
+    z = rng.normal(size=(n, 14)) * rng.uniform(0.5, 6.0, size=(n, 1))
+    e = np.exp(z - z.max(1, keepdims=True))
+    probs = [(e / e.sum(1, keepdims=True)).astype(np.float32),
+             rng.dirichlet(np.ones(14), size=n).astype(np.float32),
+             rng.dirichlet(np.ones(14), size=n).astype(np.float32)]
+    samples = [{"id": f"r{i}"} for i in range(n)]
+    id2row = {f"r{i}": i for i in range(n)}
+    calls = {}
+
+    def fake_predict_logits(model_dir, subset, *a, **kw):
+        mi = int(os.path.basename(model_dir).replace("m", ""))
+        calls[mi] = calls.get(mi, 0) + len(subset)
+        return probs[mi][[id2row[s["id"]] for s in subset]]
+
+    orig_pl, orig_ser = ad_lib.predict_logits, ad_lib.serialize
+    ad_lib.predict_logits, ad_lib.serialize = fake_predict_logits, (lambda s, ver, mht=8: s["id"])
+    try:
+        w, TH = (0.45, 0.40, 0.15), 0.95
+        mth = {"1": 0.95, "2": 0.75}
+        meta = {"ensemble": [{"dir": f"m{i}"} for i in range(3)], "weights": list(w),
+                "version": "v6",
+                "conditional": {"margin_th": TH, "cond_members": [1, 2], "member_th": mth}}
+        calls.clear()
+        out = ad_lib.predict_conditional_probs("/fake", samples, meta)
+        mine, _ = L.cascade_probs(probs, w, TH, (1, 2), member_th={1: 0.95, 2: 0.75})
+        assert np.allclose(out, mine, atol=1e-7, rtol=0), "ad_lib != refit_lib 미러"
+        # 레드팀 식 직접 대조: mid(0.75<=m<0.95) = (wL*L+wD*D)/0.85, low(<0.75) = 3멤버/1.0
+        p0 = (w[0] * probs[0]) / w[0]
+        srt = np.sort(p0, axis=1)
+        marg = srt[:, -1] - srt[:, -2]
+        mid = (marg >= 0.75) & (marg < 0.95)
+        low = marg < 0.75
+        exp_mid = (w[0] * p0[mid] + w[1] * probs[1][mid]) / (w[0] + w[1])
+        exp_low = (w[0] * p0[low] + w[1] * probs[1][low] + w[2] * probs[2][low]) / sum(w)
+        assert np.allclose(out[mid], exp_mid, atol=1e-7, rtol=0), "mid-stage 재정규 불일치"
+        assert np.allclose(out[low], exp_low, atol=1e-7, rtol=0), "low-stage 3멤버 혼합 불일치"
+        assert np.allclose(out[marg >= 0.95], p0[marg >= 0.95], atol=1e-7), "게이트 밖 행 변경"
+        # klue(멤버2) 추론행 = low 행수만 (< mdeb 행수 = sel 행수) — 시간 절감 원천
+        assert calls[2] == int(low.sum()) and calls[1] == int((marg < 0.95).sum())
+        assert calls[2] < calls[1]
+        # 균일 member_th == 기존 경로 (수치 동일 수준)
+        meta_u = {"ensemble": [{"dir": f"m{i}"} for i in range(3)], "weights": list(w),
+                  "version": "v6",
+                  "conditional": {"margin_th": TH, "cond_members": [1, 2],
+                                  "member_th": {"1": TH, "2": TH}}}
+        meta_0 = {"ensemble": [{"dir": f"m{i}"} for i in range(3)], "weights": list(w),
+                  "version": "v6", "conditional": {"margin_th": TH, "cond_members": [1, 2]}}
+        ou = ad_lib.predict_conditional_probs("/fake", samples, meta_u)
+        o0 = ad_lib.predict_conditional_probs("/fake", samples, meta_0)
+        assert np.allclose(ou, o0, atol=1e-6, rtol=0), "균일 member_th != 기존 경로"
+        # 가드: member_th > margin_th
+        bad = {"ensemble": [{"dir": f"m{i}"} for i in range(3)], "weights": list(w),
+               "version": "v6",
+               "conditional": {"margin_th": 0.9, "cond_members": [1, 2],
+                               "member_th": {"1": 0.95}}}
+        caught = False
+        try:
+            ad_lib.predict_conditional_probs("/fake", samples, bad)
+        except AssertionError:
+            caught = True
+        assert caught, "member_th > margin_th 통과됨"
+    finally:
+        ad_lib.predict_logits, ad_lib.serialize = orig_pl, orig_ser
+
+
 def test_serialize_compress_real():
     """serialize_compress 실데이터: <=keep 보장·[GEN]/[CUR]/[SEQ] 보존 (이분탐색 경계 검증)."""
     ckpt = os.path.join(L.ROOT, "work", "foldckpt_largev6_f0ckpt_f0")

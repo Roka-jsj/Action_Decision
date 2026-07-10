@@ -686,7 +686,14 @@ def predict_conditional_probs(model_root, samples, meta, device=None, return_emb
         for s in stages:
             assert len(s["weights"]) == len(ens), "stage weights 길이 != 멤버수"
             assert s["th"] <= th + 1e-9, "stage th > margin_th (게이트 밖 행은 cond 추론이 없음)"
+    member_th = cond.get("member_th")   # R60 S2: cond 멤버별 참여 th {"1":0.95,"2":0.75} — opt-in
     cond_idx = set(cond.get("cond_members", [len(ens) - 1]))   # 기본: 마지막 멤버만 조건부
+    if member_th:
+        member_th = {int(k): float(v) for k, v in member_th.items()}
+        assert set(member_th) <= cond_idx, "member_th 키가 cond_members 밖"
+        assert all(v <= th + 1e-9 for v in member_th.values()), "member_th > margin_th"
+        assert not stages, "member_th 와 stages 동시 사용 미지원(오늘 스코프)"
+        assert not meta.get("compress_tta"), "member_th 와 compress_tta 동시 사용 미지원(오늘 스코프)"
     base_ver = meta.get("version", "v4")
     ml, bs = meta.get("max_len", 320), meta.get("batch_size", 128)
     emb_out = None
@@ -788,7 +795,23 @@ def predict_conditional_probs(model_root, samples, meta, device=None, return_emb
         p_full = tta_blend(full_idx[0], p_full, list(range(len(samples))))
 
     out = p_full.copy()
-    if len(sel):
+    if len(sel) and member_th:
+        # R60 S2 비대칭 커버리지: 멤버 mi 는 margin < member_th[mi] 행만 추론·참여.
+        # 행별 참여집합으로 재정규 — 예: 0.75<=m<0.95 행은 (w_L*L + w_D*D)/(w_L+w_D).
+        marg_sel = (srt[:, -1] - srt[:, -2])[sel]
+        acc = wf * p_full[sel]
+        wt_row = np.full(len(sel), wf, dtype=p_full.dtype)
+        for mi in sorted(cond_idx):
+            mth = member_th.get(mi, th)
+            rr = np.where(marg_sel < mth)[0]
+            if not len(rr):
+                continue
+            sub_mi = [samples[int(sel[j])] for j in rr]
+            p_mi = run(mi, sub_mi, tcache)          # 참여행만 추론 — 시간 절감 원천
+            acc[rr] = acc[rr] + w[mi] * p_mi
+            wt_row[rr] += w[mi]
+        out[sel] = acc / wt_row[:, None]
+    elif len(sel):
         sub = [samples[i] for i in sel]
         if stages or rows_tta:
             # dict 경로: cond 멤버 추론 1회 (+ TTA 블렌드) 후 가중 재혼합
