@@ -544,3 +544,7 @@
 - **codex(Terra) R62 서명: m1-T3 FULL = 8ep 하드캡**(업데이트 등가: fold ep10 ≈ FULL 8ep — "프로브 best-epoch 고정" 문자 해석은 C1 재현 위험). 레시피 = 조원 8ep FULL exact replay + 직렬화만 rescue+mht12(config/hash 기록). 발사는 mdeb-T3 프로브 후. 파국하한 <0.79026 → C0계 앵커 복귀.
 - GPU 재배치: mdeb-T3 프로브 즉발(21:25~, 12ep FGM+rescue+mht12, 기준선 0.749, ~01:00) → m1-T3 FULL 8ep(~01:00 발진, ~02:50 완료) → 아침 양자화·parity·조립·캐너리. train_full_cli rescue 배선은 엔지니어 진행 중.
 - **엔지니어 train_full_cli 배선(커밋 7352f5b)**: rescue+mht12 FULL 지원 — 정확성 요건 2건 자체 적발(rescue를 id_map 리매핑 **앞**에 적용·histdrop 증강행 포함), 21종 테스트 PASS. m1-T3 FULL 8ep 데드맨 장전(mdeb-T3 프로브 종료 시 자동 발진, 발진 로그 확인 포인트: gen_rescue=True 헤더 + rescue 행수 라인). thasym95 리플레이 건은 실서버 553s 실측으로 대체 종결.
+
+### R62 후속 실측 (07-11 00:48)
+- **mdeb-T3 프로브 완주: best ep12 val 0.7640** — 기준선 0.749 +0.015, 이중계상 보정(−0.0035) 후에도 **+0.0115 순양수 → mdeb-T3 FULL GO 근거 성립**. 단 피크가 최종에폭(곡선 미수렴: ep10 0.7564→ep11 0.7600→ep12 0.7640 재상승)이라 (a) 진짜 피크가 12+ 너머일 수 있음 (b) FULL 깊이는 업데이트 등가 환산 ep12/1.25≈9.6→**10ep가 1차 후보**, 발사 전 3자 서명 필수(끝점외삽금지 교리). m1-T3와 대조: m1은 ep10 조기피크 후 하강, mdeb(FGM 유지)은 끝까지 상승 — FGM의 후반 이득 지속 가능성.
+- **m1-T3 FULL 8ep 자동발진 확인(00:48:58)**: 데드맨 정상 작동, 헤더 `gen_rescue=True mht=12` 검증 완료. rescue 행수 라인은 직렬화 후 출력 대기 중. 완료 예상 ~02:50 → 양자화·parity·조립.
