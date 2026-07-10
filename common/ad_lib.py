@@ -619,6 +619,7 @@ def predict_ensemble_probs(model_root, samples, meta, device=None, return_member
 
     meta 예: {"version":"v4","max_len":320,"batch_size":128,
               "ensemble":[{"dir":"m1"},{"dir":"m2","version":"v5"}]}
+    멤버별 "mht"(max_hist_turns, 기본 8) opt-in — R62 m1-T3(hist12 학습) 서빙 정합용.
     반환: 평균 probs[N,14]  (return_members=True면 (평균, [멤버별 probs...]))
     """
     import numpy as np
@@ -629,15 +630,17 @@ def predict_ensemble_probs(model_root, samples, meta, device=None, return_member
     for mi, member in enumerate(meta["ensemble"]):
         mdir = os.path.join(model_root, member["dir"])
         ver = member.get("version", base_ver)
-        if ver not in cache:
-            cache[ver] = [serialize(s, ver) for s in samples]
+        mht = int(member.get("mht", meta.get("mht", 8)))
+        ck = (ver, mht)
+        if ck not in cache:
+            cache[ck] = [serialize(s, ver, mht) for s in samples]
         if member.get("type") == "ngram":
-            p = predict_ngram_probs(mdir, cache[ver])
+            p = predict_ngram_probs(mdir, cache[ck])
         elif return_emb_member is not None and mi == int(return_emb_member):
             raw, emb_out = predict_logits(mdir, samples, version=ver,
                                           max_len=member.get("max_len", meta.get("max_len", 320)),
                                           batch_size=meta.get("batch_size", 128),
-                                          device=device, texts=cache[ver], return_emb=True,
+                                          device=device, texts=cache[ck], return_emb=True,
                                           gen_rescue=bool(member.get("gen_rescue", meta.get("gen_rescue", False))))
             z = raw - raw.max(1, keepdims=True)
             ez = np.exp(z)
@@ -646,7 +649,7 @@ def predict_ensemble_probs(model_root, samples, meta, device=None, return_member
             p = predict_logits(mdir, samples, version=ver,
                                max_len=member.get("max_len", meta.get("max_len", 320)),
                                batch_size=meta.get("batch_size", 128),
-                               device=device, texts=cache[ver], return_probs=True,
+                               device=device, texts=cache[ck], return_probs=True,
                                gen_rescue=bool(member.get("gen_rescue", meta.get("gen_rescue", False))))
         members.append(p)
     w = meta.get("weights")
@@ -702,14 +705,16 @@ def predict_conditional_probs(model_root, samples, meta, device=None, return_emb
         nonlocal emb_out
         m = ens[mi]
         ver = m.get("version", base_ver)
-        if ver not in texts_cache:
-            texts_cache[ver] = {}
-        tc = texts_cache[ver]
+        mht = int(m.get("mht", meta.get("mht", 8)))   # R62 m1-T3: hist12 학습멤버 서빙 정합 — opt-in
+        ck = (ver, mht)
+        if ck not in texts_cache:
+            texts_cache[ck] = {}
+        tc = texts_cache[ck]
         tx = []
         for s in subset:
             k = id(s)
             if k not in tc:
-                tc[k] = serialize(s, ver)
+                tc[k] = serialize(s, ver, mht)
             tx.append(tc[k])
         gr = bool(m.get("gen_rescue", meta.get("gen_rescue", False)))
         mml = int(m.get("max_len", ml))   # 멤버별 max_len 오버라이드 (R57 mdeb@384)
@@ -726,6 +731,9 @@ def predict_conditional_probs(model_root, samples, meta, device=None, return_emb
                               return_probs=True, gen_rescue=gr, rescue_rows_out=rro)
 
     tta = meta.get("compress_tta")   # R55 D1: {"lambda":0.5,"margin_th":0.5,("members":[...])}
+    if tta:
+        assert all(int(m.get("mht", meta.get("mht", 8))) == 8 for m in ens), \
+            "compress_tta 와 멤버 mht!=8 동시 사용 미지원(R62 스코프)"
     _rescue_rows = {} if tta else None
     full_idx_pre = [i for i in range(len(ens)) if i not in cond_idx]
     full_gate_mi = full_idx_pre[0] if full_idx_pre else -1
@@ -757,7 +765,7 @@ def predict_conditional_probs(model_root, samples, meta, device=None, return_emb
             tgt_all = set(_rescue_rows["rows"])
             rows_tta = [int(i) for i in cand if int(i) in tgt_all]
         else:
-            tc0 = tcache.get(ver0, {})
+            tc0 = tcache.get((ver0, 8), {})   # mht!=8 은 위 가드로 배제 — 게이트멤버는 항상 hist8
             cand_texts = [tc0.get(id(samples[i])) or serialize(samples[i], ver0) for i in cand]
             tgt_rel = sorted(_gen_rescue_ids(tok0, cand_texts, ml0).keys())
             rows_tta = [int(cand[j]) for j in tgt_rel]

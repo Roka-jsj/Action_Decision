@@ -81,7 +81,7 @@ def test_cascade_equals_ad_lib_conditional():
 
     orig_pl, orig_ser = ad_lib.predict_logits, ad_lib.serialize
     ad_lib.predict_logits = fake_predict_logits
-    ad_lib.serialize = lambda s, ver: s["id"]
+    ad_lib.serialize = lambda s, ver, mht=8: s["id"]
     try:
         cases = [
             ((0.55, 0.30, 0.15), 0.5, (1, 2)),   # 은행 wd30
@@ -131,7 +131,7 @@ def test_cascade_stages_equals_ad_lib_tt30():
     id2row = {f"r{i}": i for i in range(n)}
     fake, calls = _fake_ad_lib(probs, id2row)
     orig_pl, orig_ser = ad_lib.predict_logits, ad_lib.serialize
-    ad_lib.predict_logits, ad_lib.serialize = fake, (lambda s, ver: s["id"])
+    ad_lib.predict_logits, ad_lib.serialize = fake, (lambda s, ver, mht=8: s["id"])
     try:
         w, th, cond = (0.45, 0.35, 0.20), 0.6, (1, 2)
         base = {"ensemble": [{"dir": f"m{i}"} for i in range(3)],
@@ -199,7 +199,7 @@ def test_tt30_fold0_redteam_reproduction():
     id2row = {f"r{i}": i for i in range(len(rows))}
     fake, _ = _fake_ad_lib(mems, id2row)
     orig_pl, orig_ser = ad_lib.predict_logits, ad_lib.serialize
-    ad_lib.predict_logits, ad_lib.serialize = fake, (lambda s, ver: s["id"])
+    ad_lib.predict_logits, ad_lib.serialize = fake, (lambda s, ver, mht=8: s["id"])
     try:
         meta = {"ensemble": [{"dir": f"m{i}"} for i in range(3)],
                 "weights": list(L.TT30_W), "version": "v6",
@@ -458,6 +458,57 @@ def test_member_th_asymmetric_coverage():
         except AssertionError:
             caught = True
         assert caught, "member_th > margin_th 통과됨"
+    finally:
+        ad_lib.predict_logits, ad_lib.serialize = orig_pl, orig_ser
+
+
+def test_member_mht_override():
+    """R62 m1-T3: 멤버별 mht(max_hist_turns) 오버라이드 — ①지정 멤버만 hist12 직렬화
+    ②미지정=기본 8(byte-identity 회귀) ③동일 version·다른 mht 캐시 비충돌
+    ④compress_tta 동시사용 가드 ⑤plain ensemble 경로 동일 배선."""
+    rng = np.random.default_rng(62)
+    n = 300
+    probs = [rng.dirichlet(np.ones(14), size=n).astype(np.float32) for _ in range(3)]
+    samples = [{"id": f"r{i}"} for i in range(n)]
+    id2row = {f"r{i}": i for i in range(n)}
+    texts_seen = {}
+
+    def fake_serialize(s, ver, mht=8):
+        return f"{s['id']}|h{mht}"
+
+    def fake_predict_logits(model_dir, subset, *a, **kw):
+        mi = int(os.path.basename(model_dir).replace("m", ""))
+        texts_seen.setdefault(mi, set()).update(t.split("|")[1] for t in kw.get("texts"))
+        return probs[mi][[id2row[t.split("|")[0]] for t in kw.get("texts")]]
+
+    orig_pl, orig_ser = ad_lib.predict_logits, ad_lib.serialize
+    ad_lib.predict_logits, ad_lib.serialize = fake_predict_logits, fake_serialize
+    try:
+        base = {"ensemble": [{"dir": "m0", "mht": 12}, {"dir": "m1"}, {"dir": "m2"}],
+                "weights": [0.45, 0.40, 0.15], "version": "v6", "max_len": 320,
+                "conditional": {"margin_th": 0.85, "cond_members": [1, 2]}}
+        out_o = ad_lib.predict_conditional_probs("/fake", samples, base)
+        assert texts_seen[0] == {"h12"} and texts_seen[1] == {"h8"} and texts_seen[2] == {"h8"}, \
+            f"mht 직렬화 전달 오류: {texts_seen}"
+        texts_seen.clear()
+        no = {**base, "ensemble": [{"dir": "m0"}, {"dir": "m1"}, {"dir": "m2"}]}
+        out_n = ad_lib.predict_conditional_probs("/fake", samples, no)
+        assert texts_seen[0] == texts_seen[1] == texts_seen[2] == {"h8"}
+        assert np.array_equal(out_o, out_n)   # fake 확률은 mht 무관 — 경로 회귀(기본 8 byte-identity)
+        # plain ensemble 경로 동일 배선
+        texts_seen.clear()
+        pe = {"ensemble": [{"dir": "m0", "mht": 12}, {"dir": "m1"}, {"dir": "m2"}],
+              "weights": [0.45, 0.40, 0.15], "version": "v6", "max_len": 320}
+        ad_lib.predict_ensemble_probs("/fake", samples, pe)
+        assert texts_seen[0] == {"h12"} and texts_seen[1] == {"h8"} and texts_seen[2] == {"h8"}
+        # compress_tta 동시사용 가드
+        bad = {**base, "compress_tta": {"lambda": 0.5, "margin_th": 0.5}}
+        caught = False
+        try:
+            ad_lib.predict_conditional_probs("/fake", samples, bad)
+        except AssertionError:
+            caught = True
+        assert caught, "compress_tta+mht 가드 미발동"
     finally:
         ad_lib.predict_logits, ad_lib.serialize = orig_pl, orig_ser
 
