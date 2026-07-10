@@ -1,18 +1,41 @@
-# 재시작 후 새 Claude Code 세션에 붙여넣을 프롬프트 (세션 생존 시 불필요)
+# 재시작/컨테이너 전환 후 새 Claude Code 세션에 붙여넣을 프롬프트
 
 ---
 
 ```
-jeong 브랜치 Dacon 236694 재개(재시작 후). PROJECT.md §5.23, DEBATE.md R41~R44, STRATEGY.md(§6 포함), 메모리 읽고 복원.
+jeong 브랜치 Dacon 236694(AI Agent Action Decision) 이어받기. 이 파일은 git으로 자동 이전되지만,
+전체 인수인계 본문은 **HANDOFF.md**(repo 루트, .gitignore 예외 — git clone만으로는 안 옮겨짐,
+work/·packages/와 함께 docker cp 등으로 별도 이전 필요)에 있다. 없으면 아래 요약으로 시작하고
+DEBATE.md를 R53(GEN-rescue 발견)부터 읽을 것 — 그 이전(R1~R52)은 이미 종결된 축들의 기록이다.
 
-현황(07-09 심야): **은행 = wd30 0.78621**(30350 submit_c0_wd30.zip: 조원m1+조원mdeb+우리klue7ep_q8, cond[1,2], **w 0.55/0.30/0.15**, th0.5, 구bias, 382s). 계보 0.78522→0.78567(C0)→0.78621(wd30). 컷 0.78847(−0.0023). 0.78554는 유령기록(정정됨). R44: 0.80 불가, 목표=컷. **D12 하네스**(조원 mdeb-12ep OOF 기반 fold0 캐스케이드 시뮬, 레드팀 산출) 부호 3/3 검증·전이율 0.26 — D-4 공식 시뮬레이터. 사용자 전권: 조원 산출물 사용 허용(컨테이너 수정 절대금지)·**GPU0 Claude 무조건 1순위**·모든 발사는 3자 사전검증 의무(R47 사고 교훈)·타계정 LB 인용 시 운영자 제출내역 대조.
+## 3줄 요약 (2026-07-10 23시 기준)
+1. 은행(최고 LB) = 0.79026 (packages/submit_th85.zip). 다음 후보 submit_thasym95.zip은 조립 완료,
+   30k 시간 리플레이만 남음(docker exec mun-jtest .../run.sh — 권한상 운영자 실행 필요할 수 있음).
+2. GPU: mdeb-T3 프로브 학습 중 → 완료 시 데드맨 워처가 m1-T3 FULL 8ep 자동 발진 → 완료 후
+   양자화·parity·조립 절차를 거쳐야 submit_m1t3.zip이 생긴다(아직 존재하지 않음).
+3. 모든 발사·전략변경은 3자(운영자+codex+독립 레드팀) 서명 후에만 — 이 규율 절대 유지.
 
-죽은 축(재론금지): prior/transductive·aubias·S5패치·specialist·384(v6)·sb·koelectra·naive int4·kfdeb(0.7299+ρ0.954+델타-0.0006)·v4 12ep(용량슬롯 없음)·증류(현행 게이트).
+## 확정 교리 (재도출 시간 낭비 방지)
+- 입력축(훈련분포 복원, 예: GEN-rescue)은 액면전이(~0.8) / 결정규칙 미세조정(가중·th·bias)은
+  저전이(0.04~0.26) — 자원은 입력축·재학습(T3)에 집중.
+- 선택기 상한: 관측가능 신호로 만든 최적 선택기도 honest 델타 음수 — th축(margin_th 미세조정)
+  완전 종결, 재론 금지.
+- FULL 재학습은 fold 프로브 best-epoch을 정확히 그대로 씀(외삽 절대 금지 — C1 사고 -0.0082 전례).
+- splits/splits.npz는 절대 재생성 금지(이 환경 sklearn으로 재현 안 됨 — 재생성 시 전 OOF 조용히 오염).
 
-진행 중이던 것:
-① C1 종결: LB 0.77751 파국(-0.0082) → 사전등록대로 m1 교체 폐기, **C0 0.78567 앵커 확정**. 교훈(M6 확장): FULL 최종에폭 끝점은 fold 곡선에서 외삽 금지 — 신규 FULL 재학습 멤버 금지, fold-앙상블 또는 검증된 기존 FULL만.
-② klue folds1-4 OOF 농사 웨이터 장전됨(7ep b32 FGM, ~15.5h) — 죽었으면 재발사:
-   bash sim/gpu_when_idle.sh 21600 -- env HF_HUB_OFFLINE=1 PYTHONPATH=/root/Action_Decision AD_WORK=/root/Action_Decision/work AD_MODEL=klue/roberta-large AD_VERSION=v6 AD_MAXLEN=320 AD_EPOCHS=7 AD_LR=2e-5 AD_BATCH=32 AD_LLRD=1 AD_FGM=1 AD_SEED=1234 AD_FOLD_LO=1 AD_FOLD_HI=5 AD_TAG=klue_f14 python3 action_decision_maximum/src/teacher_cli.py > work/klue_f14.log 2>&1
-③ 로드맵: klue농사 → mdeb f1-4(13h) → v6-12ep f1-4(8.5h) → D-4(7/11) 클린 앙상블 OOF 재적합(bias/가중/th/w2/coverage 그리드→사전등록 최적점 1발) → D-3 klue@384 fold0(조건부) → D-2 동결 → D-1 이중은행(은행1=최고LB, 은행2=사전등록 구조상이본). LB예산 ~5-7발.
-주의: 재적합 시 배포멤버 OOF 근사 문제(조원 m1·FULL모델은 클린 OOF 부재 — fold 계열로 프록시) 사전등록에 명시. 매 수 codex+중대판정 독립 레드팀(3자).
+## 사용자 확정 목표
+우승(0.80) — 단 3자 실측(레드팀 R57/R61)이 물리적 상한 ~0.796(P≈1~2%)을 수치로 입증.
+현실 목표는 top-12 방어(컷 인플레 +0.001/일, D-0 예상 ~0.792-3, P≈45~60%) + 코어 확보 후
+문샷(합성데이터 증강, "제한된 복권")을 병행. 이 긴장은 미해소 — 새 세션이 이어받을 핵심 결정.
+
+## codex 호출(모델: GPT-5.6 Terra xhigh, 2026-07-10 밤부터)
+V=/root/.vscode-server/extensions/openai.chatgpt-26.707.31428-linux-x64/bin/linux-x86_64/codex
+CODEX_HOME=/root/.codex $V exec --sandbox read-only --skip-git-repo-check --ephemeral \
+  -C /root/Action_Decision -m gpt-5.6-terra -c model_reasoning_effort='"xhigh"' \
+  --color never - < brief.md > out.md
+(구버전 26.623 바이너리는 gpt-5.6-terra 미지원 400 에러 — 반드시 26.707 사용)
+
+세부 3종 인수인계(work/ 하위, HANDOFF.md와 함께 이전 필요): handoff_redteam.md(전 판정 이력·
+방법론자산·확정교리), handoff_strategist.md(GEN-rescue 발견전문·죽은축·문샷설계),
+handoff_engineer.md(코드자산 전체·ad_lib opt-in 스키마·splits 지뢰 상세·m1-T3 FULL 진행상황).
 ```
