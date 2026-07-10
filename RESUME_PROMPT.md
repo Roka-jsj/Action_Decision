@@ -4,8 +4,8 @@
 
 ```
 jeong 브랜치 Dacon 236694(AI Agent Action Decision) 이어받기. 이 파일은 git으로 자동 이전되지만,
-전체 인수인계 본문은 **HANDOFF.md**(repo 루트, .gitignore 예외 — git clone만으로는 안 옮겨짐,
-work/·packages/와 함께 docker cp 등으로 별도 이전 필요)에 있다. 없으면 아래 요약으로 시작하고
+전체 인수인계 본문은 **HANDOFF.md**(repo 루트 — 단 .gitignore에 포함돼 git으로 안 옮겨진다.
+work/·packages/와 함께 반드시 docker cp 등으로 별도 이전할 것)에 있다. 없으면 아래 요약으로 시작하고
 DEBATE.md를 R53(GEN-rescue 발견)부터 읽을 것 — 그 이전(R1~R52)은 이미 종결된 축들의 기록이다.
 
 ## 3줄 요약 (2026-07-10 23시 기준)
