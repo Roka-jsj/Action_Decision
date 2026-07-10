@@ -434,13 +434,52 @@ def _load_model_maybe_quant(model_dir):
     return model
 
 
+def _gen_rescue_ids(tok, texts, max_len):
+    """GEN-rescue(R53): 좌측절단으로 [GEN] 헤더가 삭제될 행만 헤더보존 input_ids 재구성.
+
+    v6 계열 직렬화는 [TIER]~[OPENEXT]/[GEN] 헤더(~59토큰)가 왼쪽 + truncation_side="left"
+    → max_len 초과 행의 일부(fold0-val 11.4%)에서 [GEN] 포함 헤더 소실. 대상 행에 한해
+    헤더 블록을 보존하고 잔여 예산을 꼬리(최근 history+[CUR])로 채운다.
+
+    대상 판정(자기가드): "[GEN]"이 원문에 있고, 절단 후 유지창(decode)에서 사라지는 행만.
+    v8(헤더 꼬리 배치)·v6n([GEN] 없음)·비절단 행은 자동 무대상 → input_ids 불변.
+    반환: {row_index: input_ids(스페셜 포함, len<=max_len)}
+    """
+    out = {}
+    n_special = tok.num_special_tokens_to_add(False)
+    keep = max_len - n_special
+    ids_all = tok(list(texts), add_special_tokens=False)["input_ids"]
+    for i, (t, ids) in enumerate(zip(texts, ids_all)):
+        if "[GEN]" not in t or len(ids) <= keep:
+            continue                                   # [GEN] 무존재 or 비절단
+        if "[GEN]" in tok.decode(ids[-keep:]):
+            continue                                   # 절단돼도 [GEN] 생존
+        pos = -1
+        for mark in (" [HIST]", " [SEQ]", " [PFLAG]", " [CUR]"):
+            p = t.find(mark)
+            if p > 0:
+                pos = p
+                break
+        if pos <= 0:
+            continue                                   # 헤더 경계 불명 → 안전 무개입
+        head = tok(t[:pos], add_special_tokens=False)["input_ids"]
+        budget = keep - len(head)
+        if budget <= 0:
+            continue
+        tail = tok(t[pos:], add_special_tokens=False)["input_ids"][-budget:]
+        out[i] = tok.build_inputs_with_special_tokens(head + tail)
+    return out
+
+
 def predict_logits(model_dir, samples, version="v3", max_len=192, batch_size=64,
-                   device=None, max_hist_turns=8, texts=None, return_probs=False, return_emb=False):
+                   device=None, max_hist_turns=8, texts=None, return_probs=False, return_emb=False,
+                   gen_rescue=False):
     """samples(list[dict]) → logits/probs(np.ndarray [N,14]). 길이정렬 배칭 + fp16(GPU).
 
     - model_dir/id_map.npy 존재 시 vocab-pruned 모델로 간주, 토큰 id 리매핑.
     - model_dir/qweights.npz 존재 시 int8 양자화 멤버 → safetensors 선복원.
     - texts 인자를 주면 직렬화 재계산 생략(앙상블에서 공유).
+    - gen_rescue(R53, opt-in): [GEN] 삭제 절단 행만 헤더보존 절단 — 비대상 행 input_ids 불변.
     """
     import numpy as np
     import torch
@@ -464,14 +503,23 @@ def predict_logits(model_dir, samples, version="v3", max_len=192, batch_size=64,
 
     if texts is None:
         texts = [serialize(s, version, max_hist_turns) for s in samples]
+    rescued = _gen_rescue_ids(tok, texts, max_len) if gen_rescue else None
     order = sorted(range(len(texts)), key=lambda i: len(texts[i]))
     logits = np.zeros((len(texts), NUM_CLASSES), dtype=np.float32)
     emb = np.zeros((len(texts), model.config.hidden_size), dtype=np.float32) if return_emb else None
     with torch.no_grad():
         for b in range(0, len(order), batch_size):
             idx = order[b:b + batch_size]
-            enc = tok([texts[i] for i in idx], padding=True, truncation=True,
-                      max_length=max_len, pad_to_multiple_of=8, return_tensors="pt")
+            if rescued and any(i in rescued for i in idx):
+                # 대상 행만 재구성 ids, 비대상 행은 동일 토크나이즈(단건==배치 동일) → byte-identity
+                seqs = [rescued[i] if i in rescued else
+                        tok(texts[i], truncation=True, max_length=max_len)["input_ids"]
+                        for i in idx]
+                enc = tok.pad({"input_ids": seqs}, padding=True, pad_to_multiple_of=8,
+                              return_tensors="pt")
+            else:
+                enc = tok([texts[i] for i in idx], padding=True, truncation=True,
+                          max_length=max_len, pad_to_multiple_of=8, return_tensors="pt")
             if id_map is not None:
                 enc["input_ids"] = torch.from_numpy(
                     id_map[enc["input_ids"].numpy()]).to(enc["input_ids"].dtype)
@@ -522,7 +570,8 @@ def predict_ensemble_probs(model_root, samples, meta, device=None, return_member
             raw, emb_out = predict_logits(mdir, samples, version=ver,
                                           max_len=member.get("max_len", meta.get("max_len", 320)),
                                           batch_size=meta.get("batch_size", 128),
-                                          device=device, texts=cache[ver], return_emb=True)
+                                          device=device, texts=cache[ver], return_emb=True,
+                                          gen_rescue=bool(member.get("gen_rescue", meta.get("gen_rescue", False))))
             z = raw - raw.max(1, keepdims=True)
             ez = np.exp(z)
             p = ez / ez.sum(1, keepdims=True)
@@ -530,7 +579,8 @@ def predict_ensemble_probs(model_root, samples, meta, device=None, return_member
             p = predict_logits(mdir, samples, version=ver,
                                max_len=member.get("max_len", meta.get("max_len", 320)),
                                batch_size=meta.get("batch_size", 128),
-                               device=device, texts=cache[ver], return_probs=True)
+                               device=device, texts=cache[ver], return_probs=True,
+                               gen_rescue=bool(member.get("gen_rescue", meta.get("gen_rescue", False))))
         members.append(p)
     w = meta.get("weights")
     if w:
@@ -587,16 +637,17 @@ def predict_conditional_probs(model_root, samples, meta, device=None, return_emb
             if k not in tc:
                 tc[k] = serialize(s, ver)
             tx.append(tc[k])
+        gr = bool(m.get("gen_rescue", meta.get("gen_rescue", False)))
         if return_emb_member is not None and mi == int(return_emb_member) and len(subset) == len(samples):
             raw, emb_out = predict_logits(os.path.join(model_root, m["dir"]), subset, version=ver,
                                           max_len=ml, batch_size=bs, device=device, texts=tx,
-                                          return_emb=True)
+                                          return_emb=True, gen_rescue=gr)
             z = raw - raw.max(1, keepdims=True)
             ez = np.exp(z)
             return ez / ez.sum(1, keepdims=True)
         return predict_logits(os.path.join(model_root, m["dir"]), subset, version=ver,
                               max_len=ml, batch_size=bs, device=device, texts=tx,
-                              return_probs=True)
+                              return_probs=True, gen_rescue=gr)
 
     tcache = {}
     full_idx = [i for i in range(len(ens)) if i not in cond_idx]
@@ -899,11 +950,13 @@ def predict(model_dir, samples, version="v3", max_len=192, batch_size=64,
     elif meta and meta.get("retrieval"):
         # 단일모델 로짓 + mean-pool 임베딩 1-forward → near-dup prior 보정 (R22 X1)
         raw, emb = predict_logits(model_dir, work, version, max_len, batch_size, device,
-                                  max_hist_turns, return_emb=True)
+                                  max_hist_turns, return_emb=True,
+                                  gen_rescue=bool(meta.get("gen_rescue", False)) if meta else False)
         scores = _to_logprobs_np(raw, np)
         scores = _retrieval_adjust(scores, emb, model_dir, meta["retrieval"])
     else:
-        scores = predict_logits(model_dir, work, version, max_len, batch_size, device, max_hist_turns)
+        scores = predict_logits(model_dir, work, version, max_len, batch_size, device, max_hist_turns,
+                                gen_rescue=bool(meta.get("gen_rescue", False)) if meta else False)
         scores = _to_logprobs_np(scores, np)
 
     if meta and meta.get("retrieval") and "ensemble" in meta:

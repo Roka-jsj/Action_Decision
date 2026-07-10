@@ -212,6 +212,58 @@ def test_tt30_fold0_redteam_reproduction():
     assert np.array_equal(L.bias_argmax(ref, old_bias), L.bias_argmax(P_tt, old_bias))
 
 
+def test_gen_rescue_byte_identity_and_targets():
+    """GEN-rescue(R53): ①비대상 행 input_ids 완전 동일(byte-identity) ②대상 행은
+    [GEN] 헤더 보존 + len<=max_len + 꼬리([CUR] 끝) 유지 ③v8/무[GEN] 텍스트 무대상."""
+    ckpt = os.path.join(L.ROOT, "work", "foldckpt_largev6_f0ckpt_f0")
+    if not os.path.isdir(ckpt):
+        print("skip (fold0 ckpt 없음)")
+        return
+    from transformers import AutoTokenizer
+    from common.io_utils import load_train
+    tok = AutoTokenizer.from_pretrained(ckpt, local_files_only=True)
+    tok.truncation_side = "left"
+    MAXLEN = 320
+    samples = load_train()[0]
+    folds, _, _ = L.load_splits()
+    va0 = np.sort(folds[0][1])
+    # 대상 밀집 확보: 앞 2000행 + history 길이 상위 1500행
+    sub = list(va0[:2000]) + sorted(va0, key=lambda i: -len(str(samples[i].get("history", ""))))[:1500]
+    sub = sorted(set(int(i) for i in sub))
+    texts = [ad_lib.serialize(samples[i], "v6") for i in sub]
+    rescued = ad_lib._gen_rescue_ids(tok, texts, MAXLEN)
+    assert rescued, "GEN삭제 대상 행 미검출 — 탐지 로직 확인 필요"
+    n_special = tok.num_special_tokens_to_add(False)
+    ids_nosp = tok(texts, add_special_tokens=False)["input_ids"]
+    for i, t in enumerate(texts):
+        old = tok(t, truncation=True, max_length=MAXLEN)["input_ids"]
+        if i in rescued:
+            new = rescued[i]
+            assert len(new) <= MAXLEN
+            dec = tok.decode(new)
+            assert "[GEN]" in dec, "rescued 행에 [GEN] 부재"
+            assert "[CUR]" in dec, "rescued 행에 [CUR](꼬리) 부재"
+            assert new[-5:] == old[-5:], "꼬리 끝 토큰 불일치(최근 문맥 소실)"
+            # 대상 조건 재검증: 절단 && 유지창에 [GEN] 없음
+            assert len(ids_nosp[i]) + n_special > MAXLEN
+            assert "[GEN]" not in tok.decode(ids_nosp[i][-(MAXLEN - n_special):])
+        elif "[GEN]" in t and len(ids_nosp[i]) + n_special > MAXLEN:
+            # 절단이지만 [GEN] 생존 → 무대상이 맞는지
+            assert "[GEN]" in tok.decode(ids_nosp[i][-(MAXLEN - n_special):])
+    # 혼합 배치 byte-identity: 배치 토크나이즈 vs 단건 토크나이즈(신형 경로) ids 동일
+    bt = tok(texts[:64], padding=True, truncation=True, max_length=MAXLEN,
+             pad_to_multiple_of=8)["input_ids"]
+    for j in range(64):
+        single = tok(texts[j], truncation=True, max_length=MAXLEN)["input_ids"]
+        assert bt[j][:len(single)] == single, "배치 vs 단건 토크나이즈 불일치"
+    # v8(헤더 꼬리 배치)·[GEN] 제거 텍스트 → 무대상(자기가드)
+    t8 = [ad_lib.serialize(samples[i], "v8") for i in sub[:500]]
+    assert not ad_lib._gen_rescue_ids(tok, t8, MAXLEN), "v8 텍스트 오검출"
+    tn = [tx.replace("[GEN] sim ", "").replace("[GEN] au ", "") for tx in texts[:500]]
+    assert not ad_lib._gen_rescue_ids(tok, tn, MAXLEN), "[GEN] 무존재 텍스트 오검출"
+    print(f"    (대상 {len(rescued)}/{len(texts)}행, byte-identity OK)")
+
+
 def test_bias_argmax_equals_deploy_formula():
     """ad_lib.predict() L847(scores=log(probs+1e-9)) + L902(pred=(scores+bias).argmax(1))."""
     rng = np.random.default_rng(1)
