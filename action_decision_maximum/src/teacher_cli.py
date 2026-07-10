@@ -43,12 +43,17 @@ EXCLUDE_AU = os.environ.get("AD_EXCLUDE_AU", "0") == "1"   # sim-only 학습 프
 SESS_BAL = os.environ.get("AD_SESSION_BALANCED", "")
 INIT_FROM = os.environ.get("AD_INIT_FROM", "")             # 체크포인트 디렉터리에서 FT 시작 (모델+토크나이저)
 SAVE_WEIGHTS = os.environ.get("AD_SAVE_WEIGHTS", "0") == "1"  # fold별 best-epoch 가중치 저장(fp16)
+# R55 T3: rescue-정합 학습 — 헤더보존 절단(배포 gen_rescue 와 동일 함수) + [HIST] 아이템 수.
+# 학습·검증·holdout 모두 같은 INPUT_IDS 를 쓰므로 자동으로 훈련-서빙 정합. 기본 off = byte 동일.
+GEN_RESCUE = os.environ.get("AD_GEN_RESCUE", "0") == "1"
+MHT = int(os.environ.get("AD_MHT", "8"))                   # serialize max_hist_turns (기존 기본 8)
 TAG = os.environ.get("AD_TAG", f"{MODEL.split('/')[-1]}_s{SEED}_f{FOLD_LO}{FOLD_HI}")
 HEAD_SEED = 1234
 device = "cuda"; assert torch.cuda.is_available()
 print(f"[teacher] {TAG} model={MODEL} v={VERSION} len={MAX_LEN} ep={EPOCHS} lr={LR} "
       f"b={BATCH} fp16={FP16} llrd={LLRD} fgm={FGM_ON} folds=[{FOLD_LO},{FOLD_HI})"
-      f" sess_bal={SESS_BAL or 'off'} init_from={INIT_FROM or 'hub'} save_w={SAVE_WEIGHTS}", flush=True)
+      f" sess_bal={SESS_BAL or 'off'} init_from={INIT_FROM or 'hub'} save_w={SAVE_WEIGHTS}"
+      f" gen_rescue={GEN_RESCUE} mht={MHT}", flush=True)
 if SESS_BAL not in ("", "weight", "sample"):
     raise ValueError(f"AD_SESSION_BALANCED must be '', 'weight', or 'sample' (got {SESS_BAL!r})")
 
@@ -63,11 +68,17 @@ cw = len(dev_idx) / (NUM_CLASSES * np.maximum(cnt, 1)); cw /= cw.mean()
 
 SRC = INIT_FROM if INIT_FROM else MODEL   # INIT_FROM이면 토크나이저도 체크포인트 것(프루닝 정합)
 tok = AutoTokenizer.from_pretrained(SRC); tok.truncation_side = "left"
-texts = [ad_lib.serialize(s, VERSION) for s in samples]
+texts = [ad_lib.serialize(s, VERSION, MHT) for s in samples]
 t0 = time.time()
 enc_all = tok(texts, truncation=True, max_length=MAX_LEN, padding=False)
 INPUT_IDS = enc_all["input_ids"]
 print(f"[tok] {len(texts)} in {time.time()-t0:.0f}s", flush=True)
+if GEN_RESCUE:
+    # 배포와 동일 함수로 [GEN] 삭제 절단 행만 헤더보존 재구성 — 학습·검증·holdout 공통 적용
+    _resc = ad_lib._gen_rescue_ids(tok, texts, MAX_LEN)
+    for _i, _ids in _resc.items():
+        INPUT_IDS[_i] = _ids
+    print(f"[gen_rescue] {len(_resc)}/{len(texts)} rows header-preserved (mht={MHT})", flush=True)
 
 
 def build():
