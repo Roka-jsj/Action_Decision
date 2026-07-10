@@ -543,3 +543,4 @@
 - **T3-320 완주: best ep10 val 0.7622** — 배포 GO(≥0.7605) 확정, 공정 기준선 +0.0046. ep11-12 하강(조기피크 — 레드팀 (c) 리스크 적중).
 - **codex(Terra) R62 서명: m1-T3 FULL = 8ep 하드캡**(업데이트 등가: fold ep10 ≈ FULL 8ep — "프로브 best-epoch 고정" 문자 해석은 C1 재현 위험). 레시피 = 조원 8ep FULL exact replay + 직렬화만 rescue+mht12(config/hash 기록). 발사는 mdeb-T3 프로브 후. 파국하한 <0.79026 → C0계 앵커 복귀.
 - GPU 재배치: mdeb-T3 프로브 즉발(21:25~, 12ep FGM+rescue+mht12, 기준선 0.749, ~01:00) → m1-T3 FULL 8ep(~01:00 발진, ~02:50 완료) → 아침 양자화·parity·조립·캐너리. train_full_cli rescue 배선은 엔지니어 진행 중.
+- **엔지니어 train_full_cli 배선(커밋 7352f5b)**: rescue+mht12 FULL 지원 — 정확성 요건 2건 자체 적발(rescue를 id_map 리매핑 **앞**에 적용·histdrop 증강행 포함), 21종 테스트 PASS. m1-T3 FULL 8ep 데드맨 장전(mdeb-T3 프로브 종료 시 자동 발진, 발진 로그 확인 포인트: gen_rescue=True 헤더 + rescue 행수 라인). thasym95 리플레이 건은 실서버 553s 실측으로 대체 종결.
