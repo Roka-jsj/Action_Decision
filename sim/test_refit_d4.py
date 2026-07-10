@@ -360,6 +360,37 @@ def test_compress_tta_equals_mirror():
          ad_lib._gen_rescue_ids, transformers.AutoTokenizer.from_pretrained) = orig
 
 
+def test_member_max_len_override():
+    """R57: conditional 경로 멤버별 max_len 오버라이드 — 지정 멤버만 변경, 미지정=글로벌(회귀)."""
+    rng = np.random.default_rng(9)
+    n = 300
+    probs = [rng.dirichlet(np.ones(14), size=n).astype(np.float32) for _ in range(3)]
+    samples = [{"id": f"r{i}"} for i in range(n)]
+    id2row = {f"r{i}": i for i in range(n)}
+    seen = {}
+
+    def fake_predict_logits(model_dir, subset, *a, **kw):
+        mi = int(os.path.basename(model_dir).replace("m", ""))
+        seen.setdefault(mi, set()).add(kw.get("max_len"))
+        return probs[mi][[id2row[s["id"]] for s in subset]]
+
+    orig_pl, orig_ser = ad_lib.predict_logits, ad_lib.serialize
+    ad_lib.predict_logits, ad_lib.serialize = fake_predict_logits, (lambda s, ver, mht=8: s["id"])
+    try:
+        base = {"ensemble": [{"dir": "m0"}, {"dir": "m1", "max_len": 384}, {"dir": "m2"}],
+                "weights": [0.45, 0.40, 0.15], "version": "v6", "max_len": 320,
+                "conditional": {"margin_th": 0.75, "cond_members": [1, 2]}}
+        out_o = ad_lib.predict_conditional_probs("/fake", samples, base)
+        assert seen[0] == {320} and seen[1] == {384} and seen[2] == {320}, f"max_len 전달 오류: {seen}"
+        seen.clear()
+        no = {**base, "ensemble": [{"dir": "m0"}, {"dir": "m1"}, {"dir": "m2"}]}
+        out_n = ad_lib.predict_conditional_probs("/fake", samples, no)
+        assert seen[0] == seen[1] == seen[2] == {320}
+        assert np.array_equal(out_o, out_n)   # fake 확률은 max_len 무관 — 경로 회귀
+    finally:
+        ad_lib.predict_logits, ad_lib.serialize = orig_pl, orig_ser
+
+
 def test_serialize_compress_real():
     """serialize_compress 실데이터: <=keep 보장·[GEN]/[CUR]/[SEQ] 보존 (이분탐색 경계 검증)."""
     ckpt = os.path.join(L.ROOT, "work", "foldckpt_largev6_f0ckpt_f0")

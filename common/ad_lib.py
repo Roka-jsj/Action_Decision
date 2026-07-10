@@ -705,16 +705,17 @@ def predict_conditional_probs(model_root, samples, meta, device=None, return_emb
                 tc[k] = serialize(s, ver)
             tx.append(tc[k])
         gr = bool(m.get("gen_rescue", meta.get("gen_rescue", False)))
+        mml = int(m.get("max_len", ml))   # 멤버별 max_len 오버라이드 (R57 mdeb@384)
         rro = _rescue_rows if (mi == full_gate_mi and len(subset) == len(samples)) else None
         if return_emb_member is not None and mi == int(return_emb_member) and len(subset) == len(samples):
             raw, emb_out = predict_logits(os.path.join(model_root, m["dir"]), subset, version=ver,
-                                          max_len=ml, batch_size=bs, device=device, texts=tx,
+                                          max_len=mml, batch_size=bs, device=device, texts=tx,
                                           return_emb=True, gen_rescue=gr, rescue_rows_out=rro)
             z = raw - raw.max(1, keepdims=True)
             ez = np.exp(z)
             return ez / ez.sum(1, keepdims=True)
         return predict_logits(os.path.join(model_root, m["dir"]), subset, version=ver,
-                              max_len=ml, batch_size=bs, device=device, texts=tx,
+                              max_len=mml, batch_size=bs, device=device, texts=tx,
                               return_probs=True, gen_rescue=gr, rescue_rows_out=rro)
 
     tta = meta.get("compress_tta")   # R55 D1: {"lambda":0.5,"margin_th":0.5,("members":[...])}
@@ -743,6 +744,7 @@ def predict_conditional_probs(model_root, samples, meta, device=None, return_emb
         tok0.truncation_side = "left"
         marg_all = srt[:, -1] - srt[:, -2]
         cand = np.where(marg_all < tth)[0]
+        ml0 = int(m0.get("max_len", ml))   # 게이트멤버 max_len (멤버별 오버라이드 존중)
         if _rescue_rows and "rows" in _rescue_rows:
             # 게이트멤버 full 패스(gen_rescue)에서 이미 스캔한 대상 행 재사용 — 추가 스캔 0
             tgt_all = set(_rescue_rows["rows"])
@@ -750,11 +752,11 @@ def predict_conditional_probs(model_root, samples, meta, device=None, return_emb
         else:
             tc0 = tcache.get(ver0, {})
             cand_texts = [tc0.get(id(samples[i])) or serialize(samples[i], ver0) for i in cand]
-            tgt_rel = sorted(_gen_rescue_ids(tok0, cand_texts, ml).keys())
+            tgt_rel = sorted(_gen_rescue_ids(tok0, cand_texts, ml0).keys())
             rows_tta = [int(cand[j]) for j in tgt_rel]
         if rows_tta:
             n_sp = tok0.num_special_tokens_to_add(False)
-            comp_texts = [serialize_compress(samples[i], tok0, ml - n_sp) for i in rows_tta]
+            comp_texts = [serialize_compress(samples[i], tok0, ml0 - n_sp) for i in rows_tta]
 
     tta_pos = {r: j for j, r in enumerate(rows_tta)}
     tta_members = set(int(x) for x in tta.get("members", range(len(ens)))) if tta else set()
@@ -770,7 +772,8 @@ def predict_conditional_probs(model_root, samples, meta, device=None, return_emb
         tx_t = [comp_texts[tta_pos[rows_local[k]]] for k in pos]
         m = ens[mi]
         Pt = predict_logits(os.path.join(model_root, m["dir"]), sub_t,
-                            version=m.get("version", base_ver), max_len=ml, batch_size=bs,
+                            version=m.get("version", base_ver),
+                            max_len=int(m.get("max_len", ml)), batch_size=bs,
                             device=device, texts=tx_t, return_probs=True, gen_rescue=True)
         lam = float(tta.get("lambda", 0.5))
         P_rows = P_rows.copy()
