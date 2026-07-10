@@ -471,9 +471,74 @@ def _gen_rescue_ids(tok, texts, max_len):
     return out
 
 
+def serialize_compress(sample, tok, keep, u_cap=60, rs_cap=30, max_items=12):
+    """CompressView(R55 D1): v6 헤더/[SEQ]/[PFLAG]/[CUR] 유지 + [HIST] 압축 재직렬화.
+
+    u:{u_cap}/rs:{rs_cap} 캡, 최대 {max_items} 아이템, 턴경계 정렬로 keep 토큰 이하 보장.
+    행당 반복 토크나이즈 대신 파트별 1회 토크나이즈 + 누적길이 이분탐색(전략가 최적화):
+    xlm-r 계열 sentencepiece 는 파트 선행공백이 ▁ 로 안정 — 파트 길이합 ≈ 결합문 길이.
+    경계 오차 대비 최종 1회 검증, 초과 시 아이템 1개씩 추가 드랍(희귀).
+    """
+    prompt = sample.get("current_prompt")
+    if not isinstance(prompt, str):
+        prompt = "" if prompt is None else str(prompt)
+    m = meta_fields(sample)
+    head = [f"[TIER] {m['user_tier']} [LANG] {m['language_pref']} [TURN] {_turn_bin(m['turn_index'])} "
+            f"[CI] {m['last_ci_status']} [GIT] {'dirty' if m['git_dirty'] else 'clean'}",
+            f"[GEN] {_gen(sample.get('id', ''))} [BUDGET] {_budget_bin(m['budget'])} "
+            f"[LOC] {_loc_bin(m['loc'])} [TOPLANG] {m['top_lang']} [NOPEN] {m['n_open_files']}"]
+    if m["open_files"]:
+        exts = sorted({path_ext(p) for p in m["open_files"] if path_ext(p)})
+        if exts:
+            head.append(f"[OPENEXT] {','.join(exts)}")
+    full_hist = sample.get("history") or []
+    seq = [t.get("name", "") for t in full_hist if t.get("role") == "assistant_action"]
+    tail = [f"[SEQ] {'>'.join(seq[-12:]) if seq else 'none'}"]
+    if not full_hist:
+        tail.append("[NOHIST]")
+    tail.append(f"[PFLAG] {_prompt_flags(prompt, m['open_files'])}")
+    tail.append(f"[CUR] {prompt}")
+
+    def turn_str(t):
+        if t.get("role") == "user":
+            return f"u: {(t.get('content') or '')[:u_cap]}"
+        nm = t.get("name", "")
+        rs = (t.get("result_summary") or "")[:rs_cap]
+        st = result_status(nm, t.get("result_summary") or "")
+        a = arg_path_or_pattern(nm, t.get("args") or {})
+        ext = path_ext(a) or glob_ext(a)
+        return f"a: {nm}{('(' + ext + ')') if ext else ''}[{st}] {rs}"
+
+    hist_items = [turn_str(t) for t in full_hist[-max_items:]]
+    # 파트별 토큰길이 1회 계산 (배치 토크나이즈)
+    pieces = head + tail + (["[HIST]"] + hist_items if hist_items else [])
+    plens = [len(x) for x in tok(pieces, add_special_tokens=False)["input_ids"]]
+    n_ht = len(head) + len(tail)
+    fixed = sum(plens[:n_ht])
+    if hist_items:
+        import bisect
+        hist_lens = plens[n_ht + 1:]
+        budget = keep - fixed - plens[n_ht]          # [HIST] 마커 비용
+        # 뒤(최신)에서부터 누적합 — 예산에 드는 최대 suffix 를 이분탐색으로
+        csum, acc = [], 0
+        for v in reversed(hist_lens):
+            acc += v
+            csum.append(acc)
+        k = bisect.bisect_right(csum, budget)        # 최신 k개 유지
+        hist_keep = hist_items[len(hist_items) - k:] if k > 0 else []
+    else:
+        hist_keep = []
+    while True:
+        parts = head + (["[HIST]"] + hist_keep if hist_keep else []) + tail
+        text = " ".join(parts)
+        if len(tok(text, add_special_tokens=False)["input_ids"]) <= keep or not hist_keep:
+            return text
+        hist_keep = hist_keep[1:]                    # 경계 오차 시 오래된 것부터 드랍
+
+
 def predict_logits(model_dir, samples, version="v3", max_len=192, batch_size=64,
                    device=None, max_hist_turns=8, texts=None, return_probs=False, return_emb=False,
-                   gen_rescue=False):
+                   gen_rescue=False, rescue_rows_out=None):
     """samples(list[dict]) → logits/probs(np.ndarray [N,14]). 길이정렬 배칭 + fp16(GPU).
 
     - model_dir/id_map.npy 존재 시 vocab-pruned 모델로 간주, 토큰 id 리매핑.
@@ -504,6 +569,8 @@ def predict_logits(model_dir, samples, version="v3", max_len=192, batch_size=64,
     if texts is None:
         texts = [serialize(s, version, max_hist_turns) for s in samples]
     rescued = _gen_rescue_ids(tok, texts, max_len) if gen_rescue else None
+    if rescue_rows_out is not None and rescued is not None:
+        rescue_rows_out["rows"] = sorted(rescued.keys())   # compress_tta 스캔 재사용(R55 D1)
     order = sorted(range(len(texts)), key=lambda i: len(texts[i]))
     logits = np.zeros((len(texts), NUM_CLASSES), dtype=np.float32)
     emb = np.zeros((len(texts), model.config.hidden_size), dtype=np.float32) if return_emb else None
@@ -638,42 +705,115 @@ def predict_conditional_probs(model_root, samples, meta, device=None, return_emb
                 tc[k] = serialize(s, ver)
             tx.append(tc[k])
         gr = bool(m.get("gen_rescue", meta.get("gen_rescue", False)))
+        rro = _rescue_rows if (mi == full_gate_mi and len(subset) == len(samples)) else None
         if return_emb_member is not None and mi == int(return_emb_member) and len(subset) == len(samples):
             raw, emb_out = predict_logits(os.path.join(model_root, m["dir"]), subset, version=ver,
                                           max_len=ml, batch_size=bs, device=device, texts=tx,
-                                          return_emb=True, gen_rescue=gr)
+                                          return_emb=True, gen_rescue=gr, rescue_rows_out=rro)
             z = raw - raw.max(1, keepdims=True)
             ez = np.exp(z)
             return ez / ez.sum(1, keepdims=True)
         return predict_logits(os.path.join(model_root, m["dir"]), subset, version=ver,
                               max_len=ml, batch_size=bs, device=device, texts=tx,
-                              return_probs=True, gen_rescue=gr)
+                              return_probs=True, gen_rescue=gr, rescue_rows_out=rro)
 
+    tta = meta.get("compress_tta")   # R55 D1: {"lambda":0.5,"margin_th":0.5,("members":[...])}
+    _rescue_rows = {} if tta else None
+    full_idx_pre = [i for i in range(len(ens)) if i not in cond_idx]
+    full_gate_mi = full_idx_pre[0] if full_idx_pre else -1
     tcache = {}
     full_idx = [i for i in range(len(ens)) if i not in cond_idx]
     wf = sum(w[i] for i in full_idx)
     p_full = sum(w[i] * run(i, samples, tcache) for i in full_idx) / wf
     srt = np.sort(p_full, axis=1)
     sel = np.where((srt[:, -1] - srt[:, -2]) < th)[0]
+
+    rows_tta, comp_texts = [], None
+    if tta and len(sel):
+        # 대상 = 게이트 마진(p_full, TTA 전 고정) < tta.margin_th ∧ 게이트멤버 토크나이저 기준 GEN삭제.
+        # 압축뷰는 게이트멤버(첫 full) 토크나이저로 ≤max_len 보장 — 타 멤버 패스는 gen_rescue 가드.
+        lam = float(tta.get("lambda", 0.5))
+        tth = float(tta.get("margin_th", 0.5))
+        assert tth <= th + 1e-9, "compress_tta.margin_th > margin_th (게이트 밖 행 TTA 불가)"
+        from transformers import AutoTokenizer
+        m0 = ens[full_idx[0]]
+        ver0 = m0.get("version", base_ver)
+        tok0 = AutoTokenizer.from_pretrained(os.path.join(model_root, m0["dir"]),
+                                             local_files_only=True)
+        tok0.truncation_side = "left"
+        marg_all = srt[:, -1] - srt[:, -2]
+        cand = np.where(marg_all < tth)[0]
+        if _rescue_rows and "rows" in _rescue_rows:
+            # 게이트멤버 full 패스(gen_rescue)에서 이미 스캔한 대상 행 재사용 — 추가 스캔 0
+            tgt_all = set(_rescue_rows["rows"])
+            rows_tta = [int(i) for i in cand if int(i) in tgt_all]
+        else:
+            tc0 = tcache.get(ver0, {})
+            cand_texts = [tc0.get(id(samples[i])) or serialize(samples[i], ver0) for i in cand]
+            tgt_rel = sorted(_gen_rescue_ids(tok0, cand_texts, ml).keys())
+            rows_tta = [int(cand[j]) for j in tgt_rel]
+        if rows_tta:
+            n_sp = tok0.num_special_tokens_to_add(False)
+            comp_texts = [serialize_compress(samples[i], tok0, ml - n_sp) for i in rows_tta]
+
+    tta_pos = {r: j for j, r in enumerate(rows_tta)}
+    tta_members = set(int(x) for x in tta.get("members", range(len(ens)))) if tta else set()
+
+    def tta_blend(mi, P_rows, rows_local):
+        """멤버 mi 확률(P_rows: rows_local 순서)에 압축뷰 2패스 λ-혼합. 비대상 행 불변."""
+        if mi not in tta_members:
+            return P_rows
+        pos = [k for k, r in enumerate(rows_local) if r in rows_tta_set]
+        if not pos:
+            return P_rows
+        sub_t = [samples[rows_local[k]] for k in pos]
+        tx_t = [comp_texts[tta_pos[rows_local[k]]] for k in pos]
+        m = ens[mi]
+        Pt = predict_logits(os.path.join(model_root, m["dir"]), sub_t,
+                            version=m.get("version", base_ver), max_len=ml, batch_size=bs,
+                            device=device, texts=tx_t, return_probs=True, gen_rescue=True)
+        lam = float(tta.get("lambda", 0.5))
+        P_rows = P_rows.copy()
+        P_rows[pos] = (1.0 - lam) * P_rows[pos] + lam * Pt
+        return P_rows
+
+    rows_tta_set = set(rows_tta)
+    if rows_tta:
+        # full 그룹: p_full 재구성 대신 게이트멤버 단일이면 직접 블렌드(가중 소거 동일).
+        # 다중 full 멤버는 각 멤버 TTA 후 재혼합이 정확하나 현행 배포는 full=1 — 일반화는 보수적으로 금지.
+        assert len(full_idx) == 1, "compress_tta 는 full 멤버 1개 구조 전용 (현행 tri)"
+        p_full = tta_blend(full_idx[0], p_full, list(range(len(samples))))
+
     out = p_full.copy()
     if len(sel):
         sub = [samples[i] for i in sel]
-        if stages:
-            # 다단 가중(R51): cond 멤버 추론은 1회, stage 별로 가중 재혼합만.
+        if stages or rows_tta:
+            # dict 경로: cond 멤버 추론 1회 (+ TTA 블렌드) 후 가중 재혼합
             marg_sel = (srt[:, -1] - srt[:, -2])[sel]
             cond_p = {mi: run(mi, sub, tcache) for mi in sorted(cond_idx)}
-            for st in stages:                      # 넓은 th → 좁은 th (깊은 단이 덮어씀)
-                rr = np.where(marg_sel < st["th"])[0]
-                if not len(rr):
-                    continue
-                sw = st["weights"]
-                wf_s = sum(sw[i] for i in full_idx)
-                acc = wf_s * p_full[sel[rr]]
-                wt = wf_s
+            if rows_tta:
+                sel_list = [int(i) for i in sel]
+                cond_p = {mi: tta_blend(mi, P, sel_list) for mi, P in cond_p.items()}
+            if stages:
+                for st in stages:                  # 넓은 th → 좁은 th (깊은 단이 덮어씀)
+                    rr = np.where(marg_sel < st["th"])[0]
+                    if not len(rr):
+                        continue
+                    sw = st["weights"]
+                    wf_s = sum(sw[i] for i in full_idx)
+                    acc = wf_s * p_full[sel[rr]]
+                    wt = wf_s
+                    for mi in sorted(cond_idx):
+                        acc = acc + sw[mi] * cond_p[mi][rr]
+                        wt += sw[mi]
+                    out[sel[rr]] = acc / wt
+            else:
+                acc = wf * p_full[sel]
+                wt = wf
                 for mi in sorted(cond_idx):
-                    acc = acc + sw[mi] * cond_p[mi][rr]
-                    wt += sw[mi]
-                out[sel[rr]] = acc / wt
+                    acc = acc + w[mi] * cond_p[mi]
+                    wt += w[mi]
+                out[sel] = acc / wt
         else:
             acc = wf * p_full[sel]
             wt = wf

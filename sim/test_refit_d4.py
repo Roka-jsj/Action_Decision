@@ -264,6 +264,121 @@ def test_gen_rescue_byte_identity_and_targets():
     print(f"    (대상 {len(rescued)}/{len(texts)}행, byte-identity OK)")
 
 
+def test_compress_tta_equals_mirror():
+    """R55 D1: compress_tta 배포 경로 — numpy 미러와 배열 동일 + 비대상 행 불변(회귀)
+    + members 옵션 + tta margin_th 가드."""
+    import transformers
+    rng = np.random.default_rng(55)
+    n = 600
+    NB = [rng.dirichlet(np.ones(14), size=n).astype(np.float32) for _ in range(3)]  # 일반뷰
+    TB = [rng.dirichlet(np.ones(14), size=n).astype(np.float32) for _ in range(3)]  # 압축뷰
+    samples = [{"id": f"r{i}"} for i in range(n)]
+    id2row = {f"r{i}": i for i in range(n)}
+
+    class FakeTok:
+        truncation_side = "left"
+
+        def num_special_tokens_to_add(self, pair=False):
+            return 2
+
+    def _is_tgt(text):                                  # 행 고유(id) 기준 — 위치 무관 일관 판정
+        return int(str(text).replace("COMP::", "")[1:]) % 3 == 0
+
+    def fake_rescue_ids(tok, texts, max_len):
+        return {j: [0] for j, t in enumerate(texts) if _is_tgt(t)}
+
+    REUSE = {"on": False}
+
+    def fake_predict_logits(model_dir, subset, *a, **kw):
+        mi = int(os.path.basename(model_dir).replace("m", ""))
+        bank = TB if (kw.get("texts") and str(kw["texts"][0]).startswith("COMP::")) else NB
+        if REUSE["on"] and kw.get("rescue_rows_out") is not None:
+            kw["rescue_rows_out"]["rows"] = [id2row[s["id"]] for s in subset
+                                             if _is_tgt(s["id"])]   # 스캔 재사용 경로
+        return bank[mi][[id2row[s["id"]] for s in subset]]
+
+    orig = (ad_lib.predict_logits, ad_lib.serialize, ad_lib.serialize_compress,
+            ad_lib._gen_rescue_ids, transformers.AutoTokenizer.from_pretrained)
+    ad_lib.predict_logits = fake_predict_logits
+    ad_lib.serialize = lambda s, ver, mht=8: s["id"]
+    ad_lib.serialize_compress = lambda s, tok, keep, **kw: f"COMP::{s['id']}"
+    ad_lib._gen_rescue_ids = fake_rescue_ids
+    transformers.AutoTokenizer.from_pretrained = staticmethod(lambda *a, **kw: FakeTok())
+    try:
+        w, th, lam, tth = (0.45, 0.40, 0.15), 0.75, 0.5, 0.5
+        base = {"ensemble": [{"dir": f"m{i}"} for i in range(3)], "weights": list(w),
+                "version": "v6", "conditional": {"margin_th": th, "cond_members": [1, 2]}}
+        meta_t = dict(base, compress_tta={"lambda": lam, "margin_th": tth})
+        out_t = ad_lib.predict_conditional_probs("/fake", samples, meta_t)
+        out_0 = ad_lib.predict_conditional_probs("/fake", samples, base)
+        # numpy 미러
+        p0 = (w[0] * NB[0]) / w[0]
+        srt = np.sort(p0, axis=1)
+        marg = srt[:, -1] - srt[:, -2]
+        sel = marg < th
+        cand = np.where(marg < tth)[0]
+        rows_tta = np.array([i for i in cand if i % 3 == 0])
+        blend = []
+        for mi in range(3):
+            B = (NB[mi] if mi else p0).copy()
+            B[rows_tta] = (1 - lam) * B[rows_tta] + lam * TB[mi][rows_tta]
+            blend.append(B)
+        exp = blend[0].copy()
+        acc = w[0] * blend[0][sel]
+        for mi in (1, 2):
+            acc = acc + w[mi] * blend[mi][sel]
+        exp[sel] = acc / sum(w)
+        assert np.allclose(out_t, exp, atol=1e-6, rtol=0), "compress_tta 미러 불일치"
+        # 비대상 행: TTA 유무 무관 동일
+        tta_mask = np.zeros(n, bool)
+        tta_mask[rows_tta] = True
+        assert np.allclose(out_t[~tta_mask], out_0[~tta_mask], atol=1e-7, rtol=0), \
+            "비대상 행 변경 — byte-identity 위반"
+        assert not np.allclose(out_t[tta_mask], out_0[tta_mask], atol=1e-7), "TTA 미적용 의심"
+        # 스캔 재사용 경로(rescue_rows_out) == 스캔 폴백 경로 (배열 동일)
+        REUSE["on"] = True
+        out_r = ad_lib.predict_conditional_probs("/fake", samples, meta_t)
+        REUSE["on"] = False
+        assert np.allclose(out_r, out_t, atol=1e-7, rtol=0), "재사용 경로 != 스캔 경로"
+        # members 옵션: [0] 만 — cond 멤버 확률 불변 → m1 채널만 반영된 미러
+        meta_m = dict(base, compress_tta={"lambda": lam, "margin_th": tth, "members": [0]})
+        out_m = ad_lib.predict_conditional_probs("/fake", samples, meta_m)
+        exp_m = blend[0].copy()
+        acc = w[0] * blend[0][sel] + w[1] * NB[1][sel] + w[2] * NB[2][sel]
+        exp_m[sel] = acc / sum(w)
+        assert np.allclose(out_m, exp_m, atol=1e-6, rtol=0), "members 옵션 미러 불일치"
+        # tta margin_th 가드
+        caught = False
+        try:
+            ad_lib.predict_conditional_probs(
+                "/fake", samples, dict(base, compress_tta={"lambda": 0.5, "margin_th": 0.9}))
+        except AssertionError:
+            caught = True
+        assert caught, "tta margin_th > margin_th 가 통과됨"
+    finally:
+        (ad_lib.predict_logits, ad_lib.serialize, ad_lib.serialize_compress,
+         ad_lib._gen_rescue_ids, transformers.AutoTokenizer.from_pretrained) = orig
+
+
+def test_serialize_compress_real():
+    """serialize_compress 실데이터: <=keep 보장·[GEN]/[CUR]/[SEQ] 보존 (이분탐색 경계 검증)."""
+    ckpt = os.path.join(L.ROOT, "work", "foldckpt_largev6_f0ckpt_f0")
+    if not os.path.isdir(ckpt):
+        print("skip (ckpt 없음)")
+        return
+    from transformers import AutoTokenizer
+    from common.io_utils import load_train
+    tok = AutoTokenizer.from_pretrained(ckpt, local_files_only=True)
+    tok.truncation_side = "left"
+    samples = load_train()[0]
+    long_rows = sorted(range(20000), key=lambda i: -len(str(samples[i].get("history", ""))))[:120]
+    for i in long_rows:
+        c = ad_lib.serialize_compress(samples[i], tok, 318)
+        ids = tok(c, add_special_tokens=False)["input_ids"]
+        assert len(ids) <= 318, f"row {i}: {len(ids)} > 318"
+        assert "[GEN]" in c and "[CUR]" in c and "[SEQ]" in c
+
+
 def test_bias_argmax_equals_deploy_formula():
     """ad_lib.predict() L847(scores=log(probs+1e-9)) + L902(pred=(scores+bias).argmax(1))."""
     rng = np.random.default_rng(1)
