@@ -66,6 +66,32 @@ folds = sp["folds"]
 cnt = np.bincount(y[dev_idx], minlength=NUM_CLASSES)
 cw = len(dev_idx) / (NUM_CLASSES * np.maximum(cnt, 1)); cw /= cw.mean()
 
+# ── AD_AUG=synth (문샷 R57b/R65, 3자 서명 2026-07-11) — fold-train 전용 주입, va/holdout 무오염 ──
+N_REAL = len(samples)
+AUG = os.environ.get("AD_AUG", "")
+if AUG == "synth":
+    from common.io_utils import CLASS_TO_IDX as _C2I, session_id as _sid, generator as _g, step_num as _st
+    _syn, _syny, _src = [], [], set()
+    with open(os.environ["AD_SYNTH_PATH"], encoding="utf-8") as _f:
+        for _ln in _f:
+            _d = json.loads(_ln)
+            _pv = _d.pop("_synth"); _lab = _d.pop("label")
+            _d["session"] = _sid(_d["id"]); _d["gen"] = _g(_d["id"]); _d["step"] = _st(_d["id"])
+            _d["label"] = _lab; _d["y"] = _C2I[_lab]
+            _syn.append(_d); _syny.append(_C2I[_lab]); _src.update(_pv["src_ids"])
+    _r = {v: k for k, v in enumerate(ids)}
+    _srows = {_r[s_] for s_ in _src}          # 미지 소스 id → KeyError 즉사(의도)
+    for _fi in range(FOLD_LO, FOLD_HI):
+        assert not (_srows & set(np.asarray(folds[_fi][1]).tolist())), \
+            f"synth 소스가 fold{_fi} va 에 존재 — 게이트 계기 오염"
+    assert not (_srows & set(np.asarray(hold_idx).tolist())), "synth 소스가 holdout 에 존재"
+    samples = list(samples) + _syn
+    y = np.concatenate([y, np.asarray(_syny, dtype=y.dtype)])
+    groups = np.concatenate([groups, np.asarray([_d["session"] for _d in _syn])])
+    _sidx = np.arange(N_REAL, len(samples))
+    folds = [(np.concatenate([np.asarray(_tr), _sidx]), _va) for _tr, _va in folds]
+    print(f"[aug:synth] +{len(_syn)}행 (소스 {len(_src)}행, va/holdout 무교차 assert 통과)", flush=True)
+
 SRC = INIT_FROM if INIT_FROM else MODEL   # INIT_FROM이면 토크나이저도 체크포인트 것(프루닝 정합)
 tok = AutoTokenizer.from_pretrained(SRC); tok.truncation_side = "left"
 texts = [ad_lib.serialize(s, VERSION, MHT) for s in samples]
@@ -147,7 +173,7 @@ def make_opt(model):
     return torch.optim.AdamW(groups, lr=base, weight_decay=0.01)
 
 
-oof = np.zeros((len(samples), NUM_CLASSES), np.float32)
+oof = np.zeros((N_REAL, NUM_CLASSES), np.float32)   # 70k 고정 — synth는 OOF 미포함(refit_lib N_TRAIN 호환)
 hold_sum = np.zeros((len(hold_idx), NUM_CLASSES), np.float32)
 scores = []
 t0 = time.time()
