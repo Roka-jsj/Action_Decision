@@ -68,6 +68,7 @@ if SIMONLY:
     print(f"[simonly] au 제외 학습: {len(ids)}행", flush=True)
 # history-dropout 증강 (R24, 히든 history분포 shift 직격 정규화). AD_AUG=histdrop, AD_AUG_RATIO(0.5).
 AUG = os.environ.get("AD_AUG", "")
+N_REAL = len(samples)   # 증강 전 실행 수 — synth 가중/OOF 기준 (R67 CP1)
 if AUG == "histdrop":
     import random as _rnd
     _r = _rnd.Random(SEED)
@@ -102,6 +103,27 @@ if AUG == "histdrop":
     samples = list(samples) + aug_s
     y = np.concatenate([y, np.array(aug_y, dtype=y.dtype)])
     print(f"[aug:histdrop] +{len(aug_s)}행 증강 → 총 {len(samples)}행 (ratio={ratio})", flush=True)
+elif AUG == "synth":
+    # ── 문샷 synth-FULL (R67 3자 서명 2026-07-11) — teacher_cli 동형 + CP1 교정 ──
+    # FULL은 fold 개념 없음 → holdout(5k 계기) 무오염만 assert. splits는 sha-pinned 캐시로만.
+    from common.io_utils import CLASS_TO_IDX as _C2I, session_id as _sid, generator as _g, step_num as _st
+    from sim.refit_lib import load_splits as _lsp
+    assert not SIMONLY, "synth+SIMONLY 미지원 (행 인덱스 어긋남)"
+    _syn, _syny, _src = [], [], set()
+    with open(os.environ["AD_SYNTH_PATH"], encoding="utf-8") as _f:
+        for _ln in _f:
+            _d = json.loads(_ln)
+            _pv = _d.pop("_synth"); _lab = _d.pop("label")
+            _d["session"] = _sid(_d["id"]); _d["gen"] = _g(_d["id"]); _d["step"] = _st(_d["id"])
+            _d["label"] = _lab; _d["y"] = _C2I[_lab]
+            _syn.append(_d); _syny.append(_C2I[_lab]); _src.update(_pv["src_ids"])
+    _r = {v: k for k, v in enumerate(ids)}
+    _srows = {_r[s_] for s_ in _src}          # 미지 소스 id → KeyError 즉사(의도)
+    _, _, _hold = _lsp()
+    assert not (_srows & set(np.asarray(_hold).tolist())), "synth 소스가 holdout(5k 계기)에 존재 — 계기 오염"
+    samples = list(samples) + _syn
+    y = np.concatenate([y, np.asarray(_syny, dtype=y.dtype)])
+    print(f"[aug:synth] +{len(_syn)}행 (소스 {len(_src)}행, holdout 무교차 assert 통과)", flush=True)
 
 # R55 T3-FULL: rescue-정합 토큰화 — teacher_cli 와 동일 패턴(배포 gen_rescue 함수 재사용).
 # 기본 off = 기존과 byte 동일. id_map 리매핑보다 반드시 먼저 적용(rescued ids = full-vocab).
@@ -122,8 +144,11 @@ if ID_MAP_PATH and os.path.exists(ID_MAP_PATH):
     INPUT_IDS = [_idm[np.asarray(s_, dtype=np.int64)].tolist() for s_ in INPUT_IDS]
     _K = int(_idm.max()) + 1
     print(f"[prune-map] id_map 적용: full {len(_idm)} -> compact {_K}", flush=True)
-cnt = np.bincount(y, minlength=NUM_CLASSES)
-cw = len(y) / (NUM_CLASSES * np.maximum(cnt, 1)); cw /= cw.mean()
+# R67 CP1: synth 주입행은 클래스가중 계산에서 제외(프로브와 기제 정합 — 주입이 가중으로 상쇄되는 것 방지).
+# histdrop/기본 경로는 기존과 동일(전체 y).
+_cw_y = y[:N_REAL] if AUG == "synth" else y
+cnt = np.bincount(_cw_y, minlength=NUM_CLASSES)
+cw = len(_cw_y) / (NUM_CLASSES * np.maximum(cnt, 1)); cw /= cw.mean()
 
 SOFT_P = None
 if SOFT:
