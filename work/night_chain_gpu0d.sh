@@ -15,7 +15,7 @@ fi
 env HF_HUB_OFFLINE=1 CUDA_VISIBLE_DEVICES=0 PYTHONPATH=/root/Action_Decision AD_WORK=/root/Action_Decision/work \
  AD_MODEL=xlm-roberta-large AD_INIT_FROM=/root/Action_Decision/work/warmstart_m1 \
  AD_VERSION=v6 AD_MAXLEN=320 AD_EPOCHS=2 AD_LR=5e-6 AD_BATCH=64 AD_LLRD=1 AD_FGM=$FGMFLAG \
- AD_SEED=777 AD_PRUNE=1 AD_GEN_RESCUE=1 AD_MHT=12 \
+ AD_SEED=777 AD_PRUNE=0 AD_GEN_RESCUE=1 AD_MHT=12 \
  AD_EXCLUDE_ROWS=/root/Action_Decision/work/exclude_rows_5k.npy AD_TAG=m1wsT3 \
  python3 action_decision_maximum/src/train_full_cli.py > work/m1wsT3.log 2>&1 &
 P=$!; echo "$(date +%F_%H:%M:%S) launch m1wsT3 pid=$P fgm=$FGMFLAG" >> $L
