@@ -58,6 +58,16 @@ if SESS_BAL not in ("", "weight", "sample"):
 set_seed(SEED)
 samples, y, ids = load_train()
 y = np.array(y)
+# R71b: 게이트행 학습제외(opt-in) — warm-start 계기편향 차단(sb 교훈). 기본off=기존경로 불변.
+EXCL = os.environ.get("AD_EXCLUDE_ROWS", "")
+if EXCL:
+    _ex = set(np.load(EXCL).astype(int).tolist())
+    _keep0 = [i for i in range(len(ids)) if i not in _ex]
+    assert len(_keep0) == len(ids) - len(_ex), "제외 인덱스 범위 오류"
+    samples = [samples[i] for i in _keep0]
+    y = y[_keep0]
+    ids = [ids[i] for i in _keep0]
+    print(f"[exclude] {len(_ex)}행 학습제외 → {len(ids)}행", flush=True)
 SIMONLY = os.environ.get("AD_SIMONLY", "0") == "1"
 _keep = None
 if SIMONLY:
