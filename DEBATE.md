@@ -576,3 +576,11 @@
 - **조립 게이트 A~F 사전등록**(완주 전 동결): A 구조(m2 **fp16 유지**·2키 차분[max_len 384→320+mht12]·vocab=[prune]로그값·앵커SHA) / B 배선(h12 비율 [37,45]%·rescue 30845 재계산·**tokenizer.json 지문==member_mdebfull** [protobuf 드리프트 방어]) / C 이중parity(Δ≥-0.005 + same-text Δ≥-0.004 신설) / D 시간(**paired 리플레이 ≤555s ∧ ≤th85-2s**, @320 예측 545~554s) / **E 제출판정기 신설**(5k m2-스왑 paired: casc≥+0.002∧CI>-0.001∧same-text≥-0.004, LB판독=0.42×casc) / F fold계기 — 분열로 통과조건 사용불가, E가 대체. 서빙 **max_len=320 확정**(훈련정합·계기정합·시간 3중 근거). 코드화: sim/assemble_mdebt3.sh(전략가 q8 초안 기각→fp16)·sim/gateE_mdebt3.py 커밋.
 - **τ/δ 판정(12:00, eval_tau_delta)**: **회색** — τ_casc +0.00162 CI[-0.00332,+0.00646](GO선 미달·0 걸침), **τ_solo +0.00422 양수, δ_solo -0.02234/δ_casc -0.01034**. 해석: T3 처치 유효, 사망원인은 δ(우리 m1 훈련 열세 — C1 재해석 확정). 정합: δ_casc+τ_casc≈게이트C -0.0089, ×0.42≈LB -0.00375 — 계기사슬 일관. 분기(사전서명): mdeb-T3 완주 허용, **제출은 게이트E 강화판(casc≥+0.0025∧CI하한>0)**, 조원 m1-T3 재학습 보류.
 - **운영 사건**: codex 인증 소실(auth.json 삭제, 11시경) — 운영자 재로그인 대기. 15:00 조립 3자서명 전 복구 필요. GPU1 후속: δ_klue 프로브(klue축 공식 판정) 발사.
+
+## R66 — codex 복구·문샷 발진 (07-11 오후)
+- **codex 재인증**(13:35, 운영자 OAuth) 후 #5 일괄서명: ①회색분기 집행 추인(게이트E 강화판 casc≥+0.0025∧CI하한>0만 제출 허용) ②문샷 fold0 발진 조건부 승인(AD_AUG=synth 기본off·diff 첨부·GPU1 1발·재롤 1회 한도) ③mdeb-T3 조립체인 기계적 집행 사전서명(게이트 FAIL 시 자동중단, Gate E PASS 외 예외 제출 없음) ④조원 m1-T3 재학습 보류·provenance만 즉시 확보 ⑤mdebfull-swap 대조제출은 게이트E flat일 때만.
+- **레드팀 문샷 서명**(14:05): 오염가드 3중 실증(fold0-val 무접촉·provenance·런타임 assert)·패치 opt-in 확인·통과선 보강(paired bootstrap CI 기록 의무)·체크포인트 3(CVD=1+PYTHONPATH·TVD 게이트 준수·diff 리뷰).
+- **teacher_cli AD_AUG=synth 패치 적용·커밋**: fold-train 전용 주입(va/holdout 무교차 assert), OOF 70k 고정, 기본off 회귀 소스검사 PASS.
+- **synth p0**: n=1500 → 게이트3 TVD 0.01677 FAIL(레드팀 예측 적중) → n=1150 재생성 → **전 게이트 PASS**(TVD 0.01294, 타겟 4클래스 uplift list +12.7%p) → dedup 통과 1007행.
+- **문샷 프로브 발진**(14:22, GPU1): mdebr_f0 레시피 동결+synth 단일차분. 헤더·[aug:synth] +1007행 검증. 판정 ~17:40, 통과선 best val ≥0.7665 ∧ 타겟집중 ≥50% ∧ 비타겟 악화 ≤0.002.
+- 병행: GPU0 mdeb-T3 ep9/10(~14:45 완주 → 게이트E 체인).
