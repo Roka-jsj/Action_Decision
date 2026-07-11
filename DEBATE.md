@@ -584,3 +584,9 @@
 - **synth p0**: n=1500 → 게이트3 TVD 0.01677 FAIL(레드팀 예측 적중) → n=1150 재생성 → **전 게이트 PASS**(TVD 0.01294, 타겟 4클래스 uplift list +12.7%p) → dedup 통과 1007행.
 - **문샷 프로브 발진**(14:22, GPU1): mdebr_f0 레시피 동결+synth 단일차분. 헤더·[aug:synth] +1007행 검증. 판정 ~17:40, 통과선 best val ≥0.7665 ∧ 타겟집중 ≥50% ∧ 비타겟 악화 ≤0.002.
 - 병행: GPU0 mdeb-T3 ep9/10(~14:45 완주 → 게이트E 체인).
+
+## R67 — 게이트E NO-GO·synth-FULL 투기 발진 (07-11 오후)
+- **게이트E NO-GO**(15:40 완주 직후 실행): mdeb-T3 casc Δ-0.00298 CI[-0.00784,+0.00119]·h12변경행 -0.01534(m1t3 동형 시그니처) → 조립·제출 자동 중단(codex#5 사전서명 집행). **부검**: h8 구서빙으로도 solo -0.00517 — 손상은 서빙 아닌 학습측(또는 10ep 깊이 교란). **T3-FULL 축 전 캐리어 사망**(m1 LB·mdeb 게이트E·klue Δ=0).
+- **synth-FULL 투기적 선행학습 3자 서명**: 운영자(최대 GPU가동 지시) + 레드팀 SIGN(오염 CLEAN 직접 검증: p0 소스 1654행이 fold0-train 전용·holdout/5k계기 무교차, **CP1 하드교정 — train_full_cli 클래스가중이 AUG 뒤 계산이라 y[:N_REAL] 가드 필수**(주입의 가중상쇄 방지), 12ep 채택=깊이교란 제거·mdebfull 짝맞춤) + codex#6 SIGN(제출 GO게이트 강화판 casc≥+0.0025∧CI>-0.001, 수치FAIL 자동kill, 인공물판정은 2/3).
+- **발진**(15:25, GPU0): mdebfull 원 레시피 정확(12ep FGM h8 seed1234) + AD_AUG=synth(p0_pass 1007행) 단일차분. CP2 검증(헤더·aug줄) 통과. 완주 ~19:50 → 게이트(자기 mdebfull과 paired 스왑·집중성 + 배포 조원-mdeb 대비 casc≥+0.001 + parity + paired 리플레이) → 오늘밤 제출 가능성.
+- kill 스위치: 17:40 문샷 프로브 수치FAIL → 즉시 kill·폐기. 근거: 우리 mdebfull이 배포 mdeb 대비 +0.00207 solo(δ프로브)라 synth +α만 실리면 m2 스왑 양수 출발점.
