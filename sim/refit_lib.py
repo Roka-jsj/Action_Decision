@@ -225,17 +225,39 @@ def usable_folds(members, folds):
 
 
 # ---------------------------------------------------------------------------
+# 멱평균(power-mean) 조합기 미러 — ad_lib._pm_f / _pm_inv_renorm 와 동일 수식 (R64)
+# ---------------------------------------------------------------------------
+PM_EPS = 1e-9
+
+
+def _pm_f(P, p):
+    return np.log(P + PM_EPS) if p == 0.0 else np.power(P + PM_EPS, p)
+
+
+def _pm_inv_renorm(Y, p):
+    out = np.exp(Y) if p == 0.0 else np.power(Y, 1.0 / p)
+    return out / out.sum(-1, keepdims=True)
+
+
+# ---------------------------------------------------------------------------
 # 캐스케이드 시뮬 — ad_lib.predict_conditional_probs L586-600 미러
 # ---------------------------------------------------------------------------
-def cascade_probs(mems, w, th, cond_members=COND_MEMBERS, stages=None, member_th=None):
+def cascade_probs(mems, w, th, cond_members=COND_MEMBERS, stages=None, member_th=None,
+                  combiner=None):
     """mems: [(n,14) 확률배열,...] (동일 행 슬라이스). ad_lib 과 동일 연산 순서.
 
     full 멤버 가중혼합 -> top1-top2 마진 < th 행만 cond 멤버 추가 혼합.
     stages(R51 tt30, 선택적): [{"th":0.6,"weights":[...]},{"th":0.3,"weights":[...]}] —
     ad_lib 의 다단 조건부 가중과 동일 수식(th 내림차순 덮어쓰기, cond 추론 행은
     margin_th 게이트 1회 그대로 → 시간 영향 0).
+    combiner(R64, 선택적): None 이면 기존 산술 가중평균, 아니면 멱평균(power-mean).
+      float p 또는 {"kind":"powmean","p":p} 형태. p=0 기하평균. ad_lib.predict_conditional_probs
+      의 combiner 경로와 배열 단위 동일(full-stage·조건부 재혼합·stages·member_th 전부).
     반환 (P, sel_mask).
     """
+    if isinstance(combiner, dict):
+        assert combiner.get("kind", "powmean") == "powmean", "combiner kind 미지원"
+        combiner = float(combiner.get("p", 0.0))
     cond_idx = set(int(i) for i in cond_members)
     full_idx = [i for i in range(len(mems)) if i not in cond_idx]
     assert full_idx, "full 멤버 없음"
@@ -250,7 +272,11 @@ def cascade_probs(mems, w, th, cond_members=COND_MEMBERS, stages=None, member_th
             assert len(s["weights"]) == len(mems), "stage weights 길이 != 멤버수"
             assert s["th"] <= float(th) + 1e-9, "stage th > margin_th"
     wf = sum(w[i] for i in full_idx)
-    p_full = sum(w[i] * mems[i] for i in full_idx) / wf
+    if combiner is None:
+        p_full = sum(w[i] * mems[i] for i in full_idx) / wf
+    else:
+        p_full = _pm_inv_renorm(
+            sum(w[i] * _pm_f(mems[i], combiner) for i in full_idx) / wf, combiner)
     srt = np.sort(p_full, axis=1)
     sel = (srt[:, -1] - srt[:, -2]) < th
     out = p_full.copy()
@@ -258,15 +284,17 @@ def cascade_probs(mems, w, th, cond_members=COND_MEMBERS, stages=None, member_th
         # R60 S2 미러: 행별 참여집합 재정규 (ad_lib member_th 경로와 동일 수식)
         sel_i = np.where(sel)[0]
         marg_sel = (srt[:, -1] - srt[:, -2])[sel_i]
-        acc = wf * p_full[sel_i]
+        acc = wf * (p_full[sel_i] if combiner is None else _pm_f(p_full[sel_i], combiner))
         wt_row = np.full(len(sel_i), wf, dtype=p_full.dtype)
         for mi in sorted(cond_idx):
             rr = np.where(marg_sel < member_th.get(mi, float(th)))[0]
             if not len(rr):
                 continue
-            acc[rr] = acc[rr] + w[mi] * mems[mi][sel_i[rr]]
+            cm = mems[mi][sel_i[rr]]
+            acc[rr] = acc[rr] + w[mi] * (cm if combiner is None else _pm_f(cm, combiner))
             wt_row[rr] += w[mi]
-        out[sel_i] = acc / wt_row[:, None]
+        out[sel_i] = acc / wt_row[:, None] if combiner is None else \
+            _pm_inv_renorm(acc / wt_row[:, None], combiner)
         return out, sel
     if sel.any():
         if stages:
@@ -279,19 +307,22 @@ def cascade_probs(mems, w, th, cond_members=COND_MEMBERS, stages=None, member_th
                     continue
                 sw = st["weights"]
                 wf_s = sum(sw[i] for i in full_idx)
-                acc = wf_s * p_full[sel_i[rr]]
+                acc = wf_s * (p_full[sel_i[rr]] if combiner is None
+                              else _pm_f(p_full[sel_i[rr]], combiner))
                 wt = wf_s
                 for mi in sorted(cond_idx):
-                    acc = acc + sw[mi] * cond_p[mi][rr]
+                    acc = acc + sw[mi] * (cond_p[mi][rr] if combiner is None
+                                          else _pm_f(cond_p[mi][rr], combiner))
                     wt += sw[mi]
-                out[sel_i[rr]] = acc / wt
+                out[sel_i[rr]] = acc / wt if combiner is None else _pm_inv_renorm(acc / wt, combiner)
         else:
-            acc = wf * p_full[sel]
+            acc = wf * (p_full[sel] if combiner is None else _pm_f(p_full[sel], combiner))
             wt = wf
             for mi in sorted(cond_idx):
-                acc = acc + w[mi] * mems[mi][sel]
+                cm = mems[mi][sel]
+                acc = acc + w[mi] * (cm if combiner is None else _pm_f(cm, combiner))
                 wt += w[mi]
-            out[sel] = acc / wt
+            out[sel] = acc / wt if combiner is None else _pm_inv_renorm(acc / wt, combiner)
     return out, sel
 
 

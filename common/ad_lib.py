@@ -672,6 +672,42 @@ def predict_ensemble_probs(model_root, samples, meta, device=None, return_member
     return (mean, members) if return_members else mean
 
 
+# ---------------------------------------------------------------------------
+# opt-in 멱평균(power-mean) 조합기 — R64
+#   conditional["combiner"] = {"kind":"powmean","p":0.0}  (p=0 기하평균, 일반 p 지원)
+#   확률이 여러 멤버에서 가중평균되는 모든 지점(full-stage · 조건부 재혼합 · stages ·
+#   member_th)에 동일 멱평균을 적용하고, 기존 wt_row(행별 정규화상수) 로직을 그대로 공유한다.
+#   부재 시 기존 산술 가중평균 경로를 문자 그대로 실행(byte-identity 회귀 보장).
+#   f-mean 결합법칙: 산술 코드가 재사용하는 p_full(가중 wf)을 멱평균에서도 한 개의
+#   유사멤버로 취급 — full 멤버가 1개(현행 tri)면 개별 멤버 멱평균과 수치 동일.
+# ---------------------------------------------------------------------------
+_PM_EPS = 1e-9
+
+
+def _parse_combiner(cond):
+    """conditional["combiner"] → p(float) 또는 None. kind 검증(powmean 전용)."""
+    c = cond.get("combiner")
+    if not c:
+        return None
+    kind = c.get("kind", "powmean")
+    if kind != "powmean":
+        raise ValueError(f"combiner kind={kind!r} 미지원 (powmean 만)")
+    return float(c.get("p", 0.0))
+
+
+def _pm_f(P, p):
+    """멱평균 f-변환: p=0 → log(P+eps), else (P+eps)^p."""
+    import numpy as np
+    return np.log(P + _PM_EPS) if p == 0.0 else np.power(P + _PM_EPS, p)
+
+
+def _pm_inv_renorm(Y, p):
+    """f-역변환 후 행합 1 재정규: p=0 → exp(Y), else Y^(1/p)."""
+    import numpy as np
+    out = np.exp(Y) if p == 0.0 else np.power(Y, 1.0 / p)
+    return out / out.sum(-1, keepdims=True)
+
+
 def predict_conditional_probs(model_root, samples, meta, device=None, return_emb_member=None):
     """조건부 앙상블 — 10분캡 안에서 full 앙상블 이득 대부분 회수 (codex R11 → R12 일반화).
 
@@ -706,6 +742,9 @@ def predict_conditional_probs(model_root, samples, meta, device=None, return_emb
         assert all(v <= th + 1e-9 for v in member_th.values()), "member_th > margin_th"
         assert not stages, "member_th 와 stages 동시 사용 미지원(오늘 스코프)"
         assert not meta.get("compress_tta"), "member_th 와 compress_tta 동시 사용 미지원(오늘 스코프)"
+    combiner = _parse_combiner(cond)   # R64 멱평균 조합기 — None 이면 기존 산술 경로(byte-identity)
+    if combiner is not None and meta.get("compress_tta"):
+        raise ValueError("combiner 와 compress_tta 동시 사용 미지원(R64 스코프)")
     base_ver = meta.get("version", "v4")
     ml, bs = meta.get("max_len", 320), meta.get("batch_size", 128)
     emb_out = None
@@ -748,7 +787,11 @@ def predict_conditional_probs(model_root, samples, meta, device=None, return_emb
     tcache = {}
     full_idx = [i for i in range(len(ens)) if i not in cond_idx]
     wf = sum(w[i] for i in full_idx)
-    p_full = sum(w[i] * run(i, samples, tcache) for i in full_idx) / wf
+    if combiner is None:
+        p_full = sum(w[i] * run(i, samples, tcache) for i in full_idx) / wf
+    else:
+        p_full = _pm_inv_renorm(
+            sum(w[i] * _pm_f(run(i, samples, tcache), combiner) for i in full_idx) / wf, combiner)
     srt = np.sort(p_full, axis=1)
     sel = np.where((srt[:, -1] - srt[:, -2]) < th)[0]
 
@@ -815,7 +858,7 @@ def predict_conditional_probs(model_root, samples, meta, device=None, return_emb
         # R60 S2 비대칭 커버리지: 멤버 mi 는 margin < member_th[mi] 행만 추론·참여.
         # 행별 참여집합으로 재정규 — 예: 0.75<=m<0.95 행은 (w_L*L + w_D*D)/(w_L+w_D).
         marg_sel = (srt[:, -1] - srt[:, -2])[sel]
-        acc = wf * p_full[sel]
+        acc = wf * (p_full[sel] if combiner is None else _pm_f(p_full[sel], combiner))
         wt_row = np.full(len(sel), wf, dtype=p_full.dtype)
         for mi in sorted(cond_idx):
             mth = member_th.get(mi, th)
@@ -824,9 +867,10 @@ def predict_conditional_probs(model_root, samples, meta, device=None, return_emb
                 continue
             sub_mi = [samples[int(sel[j])] for j in rr]
             p_mi = run(mi, sub_mi, tcache)          # 참여행만 추론 — 시간 절감 원천
-            acc[rr] = acc[rr] + w[mi] * p_mi
+            acc[rr] = acc[rr] + w[mi] * (p_mi if combiner is None else _pm_f(p_mi, combiner))
             wt_row[rr] += w[mi]
-        out[sel] = acc / wt_row[:, None]
+        out[sel] = acc / wt_row[:, None] if combiner is None else \
+            _pm_inv_renorm(acc / wt_row[:, None], combiner)
     elif len(sel):
         sub = [samples[i] for i in sel]
         if stages or rows_tta:
@@ -843,26 +887,30 @@ def predict_conditional_probs(model_root, samples, meta, device=None, return_emb
                         continue
                     sw = st["weights"]
                     wf_s = sum(sw[i] for i in full_idx)
-                    acc = wf_s * p_full[sel[rr]]
+                    acc = wf_s * (p_full[sel[rr]] if combiner is None
+                                  else _pm_f(p_full[sel[rr]], combiner))
                     wt = wf_s
                     for mi in sorted(cond_idx):
-                        acc = acc + sw[mi] * cond_p[mi][rr]
+                        acc = acc + sw[mi] * (cond_p[mi][rr] if combiner is None
+                                              else _pm_f(cond_p[mi][rr], combiner))
                         wt += sw[mi]
-                    out[sel[rr]] = acc / wt
+                    out[sel[rr]] = acc / wt if combiner is None else _pm_inv_renorm(acc / wt, combiner)
             else:
-                acc = wf * p_full[sel]
+                acc = wf * (p_full[sel] if combiner is None else _pm_f(p_full[sel], combiner))
                 wt = wf
                 for mi in sorted(cond_idx):
-                    acc = acc + w[mi] * cond_p[mi]
+                    acc = acc + w[mi] * (cond_p[mi] if combiner is None
+                                         else _pm_f(cond_p[mi], combiner))
                     wt += w[mi]
-                out[sel] = acc / wt
+                out[sel] = acc / wt if combiner is None else _pm_inv_renorm(acc / wt, combiner)
         else:
-            acc = wf * p_full[sel]
+            acc = wf * (p_full[sel] if combiner is None else _pm_f(p_full[sel], combiner))
             wt = wf
             for mi in sorted(cond_idx):
-                acc = acc + w[mi] * run(mi, sub, tcache)
+                p_mi = run(mi, sub, tcache)
+                acc = acc + w[mi] * (p_mi if combiner is None else _pm_f(p_mi, combiner))
                 wt += w[mi]
-            out[sel] = acc / wt
+            out[sel] = acc / wt if combiner is None else _pm_inv_renorm(acc / wt, combiner)
     if return_emb_member is not None:
         return out, emb_out
     return out
