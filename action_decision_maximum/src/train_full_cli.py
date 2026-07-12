@@ -47,11 +47,23 @@ SOFT_T = float(os.environ.get("AD_SOFT_T", "2.0"))
 FGM_ON = os.environ.get("AD_FGM", "0") == "1"   # 임베딩 적대교란 (R36: mdeberta 12ep 레시피 필수)
 GEN_RESCUE = os.environ.get("AD_GEN_RESCUE", "0") == "1"  # R55 T3: 헤더보존 절단(배포 동일 함수)
 MHT = int(os.environ.get("AD_MHT", "8"))                  # serialize max_hist_turns (기본 8=기존)
+# R74 신규 레버(전부 default-off → AD_AWP=AD_EMA=AD_RDROP=0 이면 기존 루프와 byte-동일)
+AWP_ON = os.environ.get("AD_AWP", "0") == "1"     # 가중치 적대교란(FGM보다 강, +0.002~0.005)
+EMA_ON = os.environ.get("AD_EMA", "0") == "1"     # 가중치 EMA(수렴궤적 추종, SWA와 상이, +0.001~0.003)
+RDROP_ON = os.environ.get("AD_RDROP", "0") == "1"  # 이중 드롭아웃 KL 일관성(+0.002~0.004)
+AWP_LR = float(os.environ.get("AD_AWP_LR", "1.0"))
+AWP_EPS = float(os.environ.get("AD_AWP_EPS", "0.01"))
+AWP_START_EP = int(os.environ.get("AD_AWP_START_EP", "1"))   # 이 에폭 인덱스(0based)부터 AWP 적용
+EMA_DECAY = float(os.environ.get("AD_EMA_DECAY", "0.999"))
+RDROP_ALPHA = float(os.environ.get("AD_RDROP_ALPHA", "0.5"))
 device = "cuda"; assert torch.cuda.is_available()
 print(f"[full] {TAG}: {MODEL} v={VERSION} len={MAX_LEN} ep={EPOCHS} lr={LR} b={BATCH} prune={PRUNE}"
       + f" sess_bal={SESS_BAL or 'off'} init_from={INIT_FROM or 'hub'} fgm={FGM_ON}"
       + f" gen_rescue={GEN_RESCUE} mht={MHT}"
-      + (f" distill(w={SOFT_W},T={SOFT_T})" if SOFT else ""), flush=True)
+      + (f" distill(w={SOFT_W},T={SOFT_T})" if SOFT else "")
+      + (f" awp(lr={AWP_LR},eps={AWP_EPS},ep>={AWP_START_EP})" if AWP_ON else "")
+      + (f" ema(decay={EMA_DECAY})" if EMA_ON else "")
+      + (f" rdrop(alpha={RDROP_ALPHA})" if RDROP_ON else ""), flush=True)
 if SESS_BAL not in ("", "weight", "sample"):
     raise ValueError(f"AD_SESSION_BALANCED must be '', 'weight', or 'sample' (got {SESS_BAL!r})")
 
@@ -280,8 +292,24 @@ class FGM:
         self.backup = {}
 
 fgm = FGM(model) if FGM_ON else None
+# R74: AWP/EMA 인스턴스화(플래그 켜질 때만 — off 면 None → 기존 경로 불변)
+if AWP_ON or EMA_ON or RDROP_ON:
+    from sim.train_techniques import AWP, EMA, rdrop_kl
+if EMA_ON and SWA_K:
+    raise ValueError("AD_EMA 와 AD_SWA_K 동시 사용 불가(둘 다 최종 가중치를 교체)")
+awp = AWP(model, adv_lr=AWP_LR, adv_eps=AWP_EPS) if AWP_ON else None
+ema = EMA(model, decay=EMA_DECAY) if EMA_ON else None
 
-def total_loss(enc, lb, bi):
+def total_loss(enc, lb, bi, rdrop=None):
+    use_rd = RDROP_ON if rdrop is None else rdrop
+    if use_rd:
+        logits1 = model(**enc).logits
+        logits2 = model(**enc).logits
+        loss = 0.5 * (ce_loss(logits1, lb, bi) + ce_loss(logits2, lb, bi))
+        if SOFT_P is not None:
+            loss = (1 - SOFT_W) * loss + SOFT_W * 0.5 * (distill_loss(logits1, bi)
+                                                         + distill_loss(logits2, bi))
+        return loss + rdrop_kl(logits1, logits2, RDROP_ALPHA)
     logits = model(**enc).logits
     loss = ce_loss(logits, lb, bi)
     if SOFT_P is not None:
@@ -308,10 +336,18 @@ for ep in range(EPOCHS):
         if fgm is not None:
             fgm.attack()
             with autocast("cuda", dtype=torch.float16):
-                aloss = total_loss(enc, lb, bi)
+                aloss = total_loss(enc, lb, bi, rdrop=False)
             scaler.scale(aloss).backward()
             fgm.restore()
+        if awp is not None and ep >= AWP_START_EP:   # R74: 가중치 적대교란(정상[+FGM] grad 위 누적)
+            awp.perturb()
+            with autocast("cuda", dtype=torch.float16):
+                wloss = total_loss(enc, lb, bi, rdrop=False)
+            scaler.scale(wloss).backward()
+            awp.restore()
         scaler.step(opt); scaler.update(); sch.step()
+        if ema is not None:                          # R74: 스텝마다 shadow 갱신
+            ema.update(model)
     print(f"  epoch {ep+1} done @{(time.time()-t0)/60:.1f}min", flush=True)
     if SWA_K and ep >= EPOCHS - SWA_K:
         sd = {k: v.detach().float().cpu() for k, v in model.state_dict().items()
@@ -356,6 +392,11 @@ if swa_sum is not None and swa_n > 1:
         fin[k] = (v / swa_n).to(fin[k].dtype)
     model.load_state_dict(fin)
     print(f"[swa] {swa_n}개 에폭 평균 적용", flush=True)
+
+if ema is not None:            # R74: EMA 적용 전 raw-final 도 저장(EMA 분리실험) 후 shadow 교체
+    save_member(TAG + "raw")
+    ema.apply_shadow(model)
+    print(f"[ema] shadow 가중치 적용(decay={EMA_DECAY})", flush=True)
 
 mb = save_member(TAG)
 open(os.path.join(WORK, f"DONE_{TAG}"), "w").write(f"size={mb:.0f}MB time={(time.time()-t0)/60:.1f}min")
