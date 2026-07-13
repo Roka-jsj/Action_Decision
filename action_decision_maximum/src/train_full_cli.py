@@ -287,6 +287,11 @@ for ep in range(EPOCHS):
             for k in swa_sum: swa_sum[k] += sd[k]
         swa_n += 1
         print(f"  [swa] snapshot ep{ep+1} ({swa_n}/{SWA_K})", flush=True)
+        # 에폭 체크포인트(SWA 창만) — 컨테이너/GPU 강탈 사망 시 재개용 (07-13 ep7 7h 유실 재발방지)
+        torch.save({"ep": ep + 1, "swa_sum": swa_sum, "swa_n": swa_n,
+                    "model": model.state_dict()},
+                   os.path.join(WORK, f"ckpt_{TAG}.pt"))
+        print(f"  [ckpt] ep{ep+1} 저장", flush=True)
 def save_member(tag):
     # 저장 → (옵션) 프루닝 → zip. 반환: zip 경로
     raw_dir = os.path.join(WORK, f"raw_{tag}")
