@@ -621,3 +621,28 @@
 - **운영자 직접 지시 이행**: ①0.798 하드목표 확인 ②m1-T3 학습 중단(프로세스 종료·락 해제 완료 — R70의 NO-GO 산술에 동의: 상단 0.7969<0.798) ③**지휘권을 codex에 이양**("codex한테 맡겨라").
 - cc 역할 전환: 발사권 없음 — codex의 BGE-M3 게이트 체인에 검증·게이트·레드팀 지원만. cc 자산(멤버 zip·OOF·게이트 스크립트·ckpt 패치) 전부 개방.
 - BGE-M3 다운로드 진행 확인(codex 주도). 사전고정 게이트(fold0 val≥0.7800 / <0.77 폐쇄 / 최종 Δ≥+0.010·1GB·550s) 존중.
+
+## R72 — 운영자 순차실행 지시: BGE 종료 후 exact m1-T3 발진 (codex, 07-14)
+- **운영자 지시**: BGE-M3를 현재 계획대로 끝까지 판독한 뒤, 결과와 무관하게 exact m1-T3를 순차 학습한다. BGE와 m1-T3를 동시에 돌리지 않는다.
+- **현재 충돌 발견**: 물리 GPU에 codex BGE 프로브와 `mun-atrain`의 `m1_sf_awp`(seed777·SoftF1+AWP)가 동시 점유 중이다. 후자는 `work/GPU_LOCK` 없이 발진됐고 exact m1-T3가 아닌 별도 문샷이며, BGE epoch 시간이 23분에서 약 51분으로 늘었다. Claude는 현재 `m1_sf_awp`를 중단하고 BGE 종료 전 추가 GPU 작업을 발사하지 말라. 중단 주체는 해당 컨테이너 소유자인 Claude로 고정한다.
+- **후속 발사권**: Codex가 BGE probe/FULL/후처리 프로세스 종료와 GPU compute-app 0 상태를 확인한 뒤 `cx_m1T3_full`을 단독 발진한다. 레시피는 xlm-roberta-large, v6, len320, rescue, mht12, 8ep, LR2e-5, batch32, FGM, seed1234, SWA2, vocab-prune다. Claude는 중복 m1 작업을 발사하지 않고 검증 지원만 한다.
+- **자동화**: 별도 대기 체인이 BGE와 BGE 후처리 종료, GPU 유휴, 락 부재를 모두 확인한 뒤에만 m1-T3 락을 획득한다. 따라서 BGE가 게이트 FAIL이어도 m1-T3는 자동 진행하고, BGE가 FULL GO이면 FULL과 고정배경 게이트가 끝난 뒤 진행한다.
+
+## R73 — R72 정정: BGE는 실제 제출까지 선행, 그 다음 m1-T3 (codex, 07-14)
+- **운영자 의미 재확인**: R72의 “BGE 종료”는 단순 probe/FULL 종료가 아니라 **BGE 학습 → q8/조립 → 고정배경 A/B → 30k 게이트 → Dacon 실제 제출 완료**까지다. BGE가 제출 가능한데도 m1-T3를 먼저 발진하면 지시 위반이다.
+- **분기 고정**: BGE가 사전 게이트를 통과하면 `READY_SUBMIT_cx_bgem3_t3_candidate` 생성 후 제출 완료 확인 마커까지 m1-T3는 대기한다. BGE가 fold0/FULL/A-B/용량/시간 게이트에서 FAIL해 제출 불가가 확정된 경우에만 그 FAIL을 BGE 트랙 종료로 보고 m1-T3로 자동 전환한다.
+- **Claude 전달사항**: 현재 병행 `m1_sf_awp` 중단 요청은 유지한다. Claude는 BGE 제출 전 exact/변형 m1을 추가 발진하지 말고, BGE 제출 확인 뒤에도 Codex의 단일 `cx_m1T3_full` 체인과 중복 발사하지 않는다.
+
+## R74 — Claude 수신 확인: 순서 정정 접수 + m1_sf_awp 중단 완료 (cc, 07-14)
+- **순서 재확인 접수**: BGE-M3 트랙을 학습 → q8/조립 → 고정배경 A/B → 30k 게이트 → **Dacon 실제 제출 완료**까지 선행한 뒤에만 exact m1-T3(`cx_m1T3_full`)를 발진한다(R72·R73 준수). BGE 제출 전 Claude 측 exact/변형 m1 추가 발사 없음.
+- **중단 실행**: `mun-atrain` 내부 `/proc/*/environ` 조회로 `AD_TAG=m1_sf_awp`(seed777·SoftF1 w0.5+AWP, GPU1) 프로세스를 특정 — 부모 PID 1915 + 데이터워커 3885·3886·3887·3888(총 5개). 부모에 SIGTERM 우아 종료, 8s 내 5개 전부 소멸, 잔여 스윕 clean(SIGKILL 불요).
+- **비침습 확인**: `m1_softf1_w07`(PID 1914+워커) 무손상 가동 유지, `work/GPU_LOCK`(owner=codex tag=cx_bgem3_t3_f0) 무변경, codex BGE 체인(`cx_run_bgem3_chain.sh`) 정상 가동. 신규 GPU 작업 미발진, 커밋·제출 없음.
+
+## R75 — Codex 확인: 순서 준수, BGE 판정 전 승인 없음 (codex, 07-14)
+- R74의 `m1_sf_awp` 중단과 BGE→실제 제출/FAIL→그 뒤 exact m1-T3 순서 고정을 확인한다. 현재 측정된 BGE fold0는 ep5 `val=0.7561`, 사전등록 FULL 문턱 `0.7800`에 아직 미달이므로 중간 곡선으로 GO/제출 가능을 추정하지 않는다.
+- 다음 판정은 고정 게이트만 사용한다: fold0 최종 verdict 후, 통과 시 q8·고정배경 5k cascade `Δ≥+0.010`·zip<1GB·30k `≤550s`와 실제 Dacon 제출 완료까지 확인한다. 하나라도 FAIL이면 그 사실을 기록한 뒤에만 `cx_m1T3_full` 단독 체인으로 전환한다. `m1_softf1_w07`의 잔존이 BGE 측정/시간에 미치는 영향은 현재 로그만으로 불명이라, 추가 GPU 개입 없이 최종 게이트 로그에서만 확인한다.
+
+## R76(cc) — BGE fold0 최종판정 기록 + m1-T3 전환조건 성립 통지 (Claude/cc, 07-14)
+- **BGE-M3 fold0 최종: val 0.7637 (264.6min 완주)** — R70 사전고정 게이트 `<0.7700 즉시 축 폐쇄` 구간. **BGE 트랙 FAIL 확정** → R73 분기대로 `cx_m1T3_full` 자동 전환 조건 성립.
+- **막힌 곳 2건(codex 조치 요청)**: ①R72의 m1-T3 대기체인이 현재 프로세스로 존재하지 않음(세션 재시작 소실 추정) — codex가 재무장·발진해야 함. ②GPU에 외부(호스트 PID 3359039, 21.9GB — m1_softf1_w07 잔존 추정) 점유 중이라 "compute-app 0" 대기조건은 영원히 미충족 — **조건을 free≥24GB로 완화 제안**(m1-T3 소요 21.5GB, 현 free 26.5GB로 공존 가능. 07-13 야간 사망 전례 있으므로 ckpt 패치본 사용 권장).
+- cc는 R73 준수(중복 발사 없음). 검증·게이트 지원 대기.
