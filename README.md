@@ -1,5 +1,11 @@
 # AI 에이전트 다음 행동 예측 — Dacon 경진대회 기록
 
+![Python](https://img.shields.io/badge/Python-3.11-3776AB?logo=python&logoColor=white)
+![PyTorch](https://img.shields.io/badge/PyTorch-2.7-EE4C2C?logo=pytorch&logoColor=white)
+![Transformers](https://img.shields.io/badge/%F0%9F%A4%97%20Transformers-4.46.3-FFD21E)
+![Docker](https://img.shields.io/badge/Docker-A6000%20train%2Fverify-2496ED?logo=docker&logoColor=white)
+![Score](https://img.shields.io/badge/macro--F1-0.79165-success)
+
 코딩 에이전트의 세션 로그(대화 이력 + 워크스페이스 메타데이터)로부터 에이전트가 취할 다음 행동(14클래스)을 예측하는 대회. 2026-07-02 ~ 07-15, 13일간 91회 제출로 수행한 실험 캠페인의 전체 기록이다.
 
 | 항목 | 내용 |
@@ -80,8 +86,9 @@ flowchart LR
 
 | 분류 | 사용 기술 |
 |---|---|
+| 언어·환경 | Python 3.11 · CUDA 12.8 · 학습 A6000 48GB(Docker) · 추론 타깃 T4 16GB(오프라인, fp16) |
 | 모델 | XLM-RoBERTa-large · mDeBERTa-v3-base · KLUE-RoBERTa-large |
-| 프레임워크 | PyTorch · HuggingFace Transformers |
+| 프레임워크 | PyTorch `2.7.1` · HuggingFace Transformers `4.46.3` · scikit-learn `1.8.0` · NumPy `1.26` |
 | 학습 기법 | soft-F1 surrogate loss · FGM adversarial training · SWA · LLRD · gradient checkpointing |
 | 경량화·서빙 | int8 group-wise 양자화(자체 구현) · vocab pruning · 마진 게이트 캐스케이드 · 로그공간 bias 후처리 |
 | 실험 인프라 | bash 조립 파이프라인(가드 6종) · 런타임 캐너리 · 라벨 프로브 하네스 · paired bootstrap 검정 |
