@@ -1,5 +1,6 @@
 # 2026 AI·SW중심대학 디지털 경진대회 : AI부문
 https://dacon.io/competitions/official/236694/overview/description
+- AI Agent 행동(Action) 의사결정 예측 챌린지
 
 ![Python](https://img.shields.io/badge/Python-3.11-3776AB?logo=python&logoColor=white)
 ![PyTorch](https://img.shields.io/badge/PyTorch-2.7-EE4C2C?logo=pytorch&logoColor=white)
@@ -7,7 +8,8 @@ https://dacon.io/competitions/official/236694/overview/description
 ![Docker](https://img.shields.io/badge/Docker-A6000%20train%2Fverify-2496ED?logo=docker&logoColor=white)
 ![Score](https://img.shields.io/badge/macro--F1-0.79165-success)
 
-코딩 에이전트의 세션 로그(대화 이력 + 워크스페이스 메타데이터)로부터 에이전트가 취할 다음 행동(14클래스)을 예측하는 대회. 2026-07-02 ~ 07-15, 13일간 91회 제출로 수행한 실험 캠페인의 전체 기록이다.
+---
+
 
 | 항목 | 내용 |
 |---|---|
