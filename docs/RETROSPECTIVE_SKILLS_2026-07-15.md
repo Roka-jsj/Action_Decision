@@ -118,8 +118,8 @@
 | `sim/assemble_m1swap_fast.sh` / `assemble_m3swap.sh` | 멤버 스왑 조립 |
 | `sim/quantize_member_jitter.py` | SR/증폭 재양자화 (--qseed, --amp) |
 | `sim/quantize_member.py` | 표준 RTN q8 양자화 |
-| `work/launch_post_restart.sh` | 재시작 후 양GPU 원샷 발사 (CUDA 프로브 + 생존확인) |
-| `work/launch_hash6.sh` | 마감 역산 에폭 자동룰 발사기 |
+| `sim/ops/launch_post_restart.sh` | 재시작 후 양GPU 원샷 발사 (CUDA 프로브 + 생존확인) |
+| `sim/ops/launch_hash6.sh` | 마감 역산 에폭 자동룰 발사기 |
 | `sim/check_zip.py` + 5행 캐너리 패턴 | 제출 전 필수 검증 |
 | `experiments_master.csv` | 실험 원장 (전 판독·판정) |
 | `docs/` 본 문서 | 회고 |
