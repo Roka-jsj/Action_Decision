@@ -44,6 +44,10 @@ SESS_BAL = os.environ.get("AD_SESSION_BALANCED", "")
 SOFT = os.environ.get("AD_SOFT", "")            # teacher 소프트라벨 npz(probs [N,14]) → 증류 모드
 SOFT_W = float(os.environ.get("AD_SOFT_W", "0.3"))   # loss = (1-w)*CE(hard) + w*KL(soft, T)
 SOFT_T = float(os.environ.get("AD_SOFT_T", "2.0"))
+SOFTF1 = os.environ.get("AD_SOFTF1", "0") == "1"     # soft-macro-F1 surrogate loss (opt-in, 지표정합)
+SOFTF1_W = float(os.environ.get("AD_SOFTF1_W", "0.5"))  # loss = (1-w)*CE + w*(1-soft_macroF1)
+SOFTF1_CW = os.environ.get("AD_SOFTF1_CW", "0") == "1"  # v2: 배포 per-class F1 역가중(약클래스 강조, cap[0.25,2])
+SOFTF1_MUL = os.environ.get("AD_SOFTF1_MUL", "0") == "1"  # v3: 곱셈결합 loss = CE*(1+w*(1-softF1)) — 덧셈 대신 지표증폭
 FGM_ON = os.environ.get("AD_FGM", "0") == "1"   # 임베딩 적대교란 (R36: mdeberta 12ep 레시피 필수)
 GEN_RESCUE = os.environ.get("AD_GEN_RESCUE", "0") == "1"  # R55 T3: 헤더보존 절단(배포 동일 함수)
 MHT = int(os.environ.get("AD_MHT", "8"))                  # serialize max_hist_turns (기본 8=기존)
@@ -183,16 +187,30 @@ if SOFT:
     assert _zids == list(ids), "소프트라벨 id 순서 불일치"
     SOFT_P = torch.tensor(_probs)   # [N,14]
 
-torch.manual_seed(1234)
+torch.manual_seed(int(os.environ.get("AD_HEADSEED", "1234")))  # 헤드init·셔플·dropout RNG (기본 1234=기존 byte동일. 지터로터리: AD_HEADSEED=AD_SEED로 3시드 분리)
+_DROPOUT = os.environ.get("AD_DROPOUT", "")   # 지터로터리용 opt-in(예 0.07/0.13). 미설정=모델 기본(0.1) 불변
+_mk = {}
+if _DROPOUT:
+    _mk = dict(hidden_dropout_prob=float(_DROPOUT), attention_probs_dropout_prob=float(_DROPOUT))
 model = AutoModelForSequenceClassification.from_pretrained(
     SRC, num_labels=NUM_CLASSES, torch_dtype=torch.float32,
     id2label={i: c for i, c in enumerate(CLASSES)},
-    label2id={c: i for i, c in enumerate(CLASSES)}).to(device)
+    label2id={c: i for i, c in enumerate(CLASSES)}, **_mk).to(device)
 if os.environ.get("AD_GRADCKPT", "0") == "1":
     # 16GB GPU(T4/P100)에서 large b64 OOM 방지 — 레시피(배치/LR) 보존, ~30% 감속
     model.gradient_checkpointing_enable()
     model.config.use_cache = False
     print("[gradckpt] enabled", flush=True)
+
+# top-N 인코더층 재초기화 (Zhang et al. 2021, opt-in; 미설정=기존경로 byte동일)
+REINIT_N = int(os.environ.get("AD_REINIT_N", "0"))
+if REINIT_N:
+    _lys = model.base_model.encoder.layer
+    assert 0 < REINIT_N <= len(_lys) // 4, f"REINIT_N 과대: {REINIT_N}/{len(_lys)}"
+    for _ly in _lys[len(_lys) - REINIT_N:]:
+        for _md in _ly.modules():
+            model._init_weights(_md)
+    print(f"[reinit] top-{REINIT_N}/{len(_lys)} layers re-init", flush=True)
 
 def make_opt(m):
     if not LLRD:
@@ -275,6 +293,27 @@ def distill_loss(logits, bi):
     per_row = torch.nn.functional.kl_div(logq, tp_t, reduction="none").sum(1) * (SOFT_T ** 2)
     return (per_row * rw).sum() / rw.sum().clamp_min(1e-8)
 
+# v2 클래스가중(배포 캐스케이드 5k per-class F1 역가중 — 약클래스(M4/lint/ask/plan) 강조)
+_F1_DEPLOY = torch.tensor([0.615, 0.675, 0.536, 0.678, 0.993, 1.0, 0.985,
+                           0.850, 0.870, 0.830, 0.838, 0.815, 0.884, 1.0])  # CLASSES 순
+_SF1_CW = (1.0 - _F1_DEPLOY)
+_SF1_CW = (_SF1_CW / _SF1_CW.mean()).clamp(0.25, 2.0)
+
+def softf1_loss(logits, lb):
+    """soft-macro-F1 대체손실(sigmoidF1 계열): 미분가능 배치 macro-F1 → 1-F1 최소화.
+    지표(macro-F1) 정합 학습. 배치내 per-class soft TP/FP/FN. AD_SOFTF1_CW=1이면 약클래스 가중."""
+    p = torch.softmax(logits.float(), dim=1)                 # [B,14]
+    yoh = torch.nn.functional.one_hot(lb, NUM_CLASSES).float()  # [B,14]
+    tp = (p * yoh).sum(0)                                     # [14]
+    fp = (p * (1.0 - yoh)).sum(0)
+    fn = ((1.0 - p) * yoh).sum(0)
+    f1 = 2.0 * tp / (2.0 * tp + fp + fn + 1e-8)               # [14]
+    present = (yoh.sum(0) > 0).float()                        # 배치에 존재하는 클래스만 평균
+    if SOFTF1_CW:
+        w = _SF1_CW.to(logits.device) * present
+        return 1.0 - (f1 * w).sum() / w.sum().clamp_min(1e-6)
+    return 1.0 - (f1 * present).sum() / present.sum().clamp_min(1.0)
+
 class FGM:
     def __init__(self, m, eps=1.0):
         self.m, self.eps, self.backup = m, eps, {}
@@ -291,7 +330,7 @@ class FGM:
                 p.data = self.backup[n]
         self.backup = {}
 
-fgm = FGM(model) if FGM_ON else None
+fgm = FGM(model, eps=float(os.environ.get("AD_FGM_EPS", "1.0"))) if FGM_ON else None
 # R74: AWP/EMA 인스턴스화(플래그 켜질 때만 — off 면 None → 기존 경로 불변)
 if AWP_ON or EMA_ON or RDROP_ON:
     from sim.train_techniques import AWP, EMA, rdrop_kl
@@ -309,11 +348,19 @@ def total_loss(enc, lb, bi, rdrop=None):
         if SOFT_P is not None:
             loss = (1 - SOFT_W) * loss + SOFT_W * 0.5 * (distill_loss(logits1, bi)
                                                          + distill_loss(logits2, bi))
+        if SOFTF1:
+            loss = (1 - SOFTF1_W) * loss + SOFTF1_W * 0.5 * (softf1_loss(logits1, lb)
+                                                             + softf1_loss(logits2, lb))
         return loss + rdrop_kl(logits1, logits2, RDROP_ALPHA)
     logits = model(**enc).logits
     loss = ce_loss(logits, lb, bi)
     if SOFT_P is not None:
         loss = (1 - SOFT_W) * loss + SOFT_W * distill_loss(logits, bi)
+    if SOFTF1:
+        if SOFTF1_MUL:
+            loss = loss * (1.0 + SOFTF1_W * softf1_loss(logits, lb))  # 곱셈결합(v3)
+        else:
+            loss = (1 - SOFTF1_W) * loss + SOFTF1_W * softf1_loss(logits, lb)
     return loss
 
 t0 = time.time()
