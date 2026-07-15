@@ -103,6 +103,7 @@ flowchart LR
 ├── splits/                          # 고정 fold 인덱스
 ├── docs/
 │   ├── RETROSPECTIVE_SKILLS_2026-07-15.md   # 기술 회고 (방법론·하네스·교훈)
+│   ├── SKILLS_AND_HARNESS.md            # 클로드 스킬 7종 + 하네스 8종 카탈로그
 │   └── archive/                     # 캠페인 당시 원본 문서 (종합보고서 · 운영문서 · 사전등록 실물)
 └── .claude/skills/                  # 캠페인에서 추출한 재사용 Claude Code 스킬 7종
 ```
