@@ -1,4 +1,5 @@
-# AI 에이전트 다음 행동 예측 — Dacon 경진대회 기록
+# 2026 AI·SW중심대학 디지털 경진대회 : AI부문
+https://dacon.io/competitions/official/236694/overview/description
 
 ![Python](https://img.shields.io/badge/Python-3.11-3776AB?logo=python&logoColor=white)
 ![PyTorch](https://img.shields.io/badge/PyTorch-2.7-EE4C2C?logo=pytorch&logoColor=white)
