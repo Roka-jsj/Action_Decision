@@ -71,7 +71,7 @@ docker exec -it mun-jtrain bash    # 조원: mun-train
 안에서 — **블록 1 (저장소·도구)** (진입 위치가 이미 /root/Action_Decision — cd 불필요):
 ```bash
 git clone https://github.com/Roka-jsj/Action_Decision.git .
-git config user.name "Roka-jsj" && git config user.email "vasebull@gmail.com"
+git config user.name "Roka-jsj" && git config user.email "<email>"
 apt-get update -qq && apt-get install -y -qq zip unzip docker.io
 echo 'export DOCKER_API_VERSION=1.43' >> ~/.bashrc && export DOCKER_API_VERSION=1.43   # 신형 CLI ↔ 구형 호스트데몬 정합
 docker ps        # 소켓 확인 (컨테이너 목록 보이면 OK; "client version too new" 뜨면 위 줄 재확인)

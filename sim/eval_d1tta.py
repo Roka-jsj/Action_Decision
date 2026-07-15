@@ -26,7 +26,7 @@ from common import ad_lib, postproc  # noqa: E402
 from common.io_utils import load_train  # noqa: E402
 
 ROOT = L.ROOT
-SCRATCH = "/tmp/claude-0/-root-Action-Decision/4ad02a7b-69d3-4625-b907-25b364030498/scratchpad"
+SCRATCH = "/tmp/ad_work"
 CKPT = os.path.join(ROOT, "work", "foldckpt_largev6_f0ckpt_f0")
 LAM, TTH = 0.5, 0.5
 GATE_SLICE = +0.004

@@ -35,7 +35,7 @@ PY
 python3 sim/check_zip.py "packages/submit_$TAG.zip" | tail -1
 
 # [수리3] 캐너리 강화: missing=0 필수 + action 클래스 유효성
-RUN=/tmp/claude-0/-root-Action-Decision/0b8c94fb-8cfc-4609-aaa0-00660d405e6c/scratchpad/rt_$TAG
+RUN=/tmp/ad_work/rt_$TAG
 rm -rf "$RUN"; mkdir -p "$RUN/data"
 (cd "$RUN" && unzip -q "/root/Action_Decision/packages/submit_$TAG.zip")
 cp data/test.jsonl data/sample_submission.csv "$RUN/data/"

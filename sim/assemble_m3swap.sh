@@ -40,7 +40,7 @@ python3 sim/check_zip.py "packages/submit_$TAG.zip" | tail -1
 B=$(stat -c%s "packages/submit_$TAG.zip"); echo "zip bytes: $B"
 [ "$B" -lt 1000000000 ] || { echo "FATAL: 1GB 초과"; exit 1; }
 
-RUN=/tmp/claude-0/-root-Action-Decision/0b8c94fb-8cfc-4609-aaa0-00660d405e6c/scratchpad/rt_$TAG
+RUN=/tmp/ad_work/rt_$TAG
 rm -rf "$RUN"; mkdir -p "$RUN/data"
 (cd "$RUN" && unzip -q "/root/Action_Decision/packages/submit_$TAG.zip")
 cp data/test.jsonl data/sample_submission.csv "$RUN/data/"

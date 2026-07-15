@@ -1,191 +1,118 @@
-# Action Decision — Dacon 236694 (AI Agent 다음 행동 예측)
+# AI 에이전트 행동 예측 — 13일간의 리더보드 캠페인
 
-에이전트 세션 상태(구조 메타 + 대화 이력 + 현재 발화)로 **다음 action(14클래스)** 을 예측한다.
-평가지표 = **Macro-F1**. 제출은 **코드 제출**(zip: `model/` + `script.py` + `requirements.txt`)이고,
-Dacon 서버(T4 16GB, 오프라인, ≤1GB, 설치·추론 각 ≤10분)가 30k 히든 테스트로 채점한다.
+> **Dacon 대회**: 코딩 에이전트 세션 로그로부터 다음 행동(14클래스) 예측 · 지표 **macro-F1** · 히든 테스트 30k (Public=Private)
+> **제약**: 제출물 = 코드+모델 zip ≤ 1GB · T4 1장 오프라인 추론 600초 이내
+> **결과**: **0.6285 → 0.7916517** (91회 제출, 13일) · 1위 0.7998 · TOP-12 컷 0.7960
 
-> **현재: LB 0.78226 (6위권, 07-05).** 전체 여정·법칙·기각가설 정리 = [`REPORT.md`](REPORT.md) ← 종합 보고서.
-> 운영 상세·재개 체크리스트 = [`PROJECT.md`](PROJECT.md) / GPT-5.5 상호비판 토론 로그 = [`DEBATE.md`](DEBATE.md) / 실험 원장 = [`experiments_master.csv`](experiments_master.csv).
+![캠페인 점수 궤적](assets/score_timeline.png)
 
----
-
-## 0. 빠른 시작 (팀원용)
-
-```bash
-# 1) 클론
-git clone https://github.com/Roka-jsj/Action_Decision.git
-cd Action_Decision
-
-# 2) 파이썬 환경 (로컬은 분석/패키징용, GPU 학습은 Colab/Kaggle)
-python3 -m pip install -r requirements-dev.txt
-
-# 3) 대회 데이터 배치 (⚠️ repo에 없음 — Dacon에서 직접 다운로드)
-#    https://dacon.io/competitions/official/236694/data 에서 open.zip 받기
-#    받은 open.zip을 repo 루트에 두고 압축 해제:
-python3 -c "import zipfile; zipfile.ZipFile('open.zip').extractall('.')"
-#    → data/{train.jsonl, train_labels.csv, test.jsonl, sample_submission.csv} 생성 확인
-ls data/
-
-# 4) fold 인덱스는 이미 splits/splits.npz 로 커밋돼 있음 (재생성 금지 — 전 팀원 동일 fold 사용)
-#    혹시 없으면: python3 -c "from common.cv import make_splits; ..." (PROJECT.md 참고)
-```
-
-데이터 무결성 확인:
-```bash
-python3 -c "from common.io_utils import load_train; s,y,i=load_train(); print(len(s),'samples', len(set(y)),'classes')"
-# → 70000 samples 14 classes
-```
+이 레포는 단순한 모델 코드가 아니라, **91번의 제출을 하나의 실험 캠페인으로 운영한 기록**입니다.
+모든 아이디어는 리더보드 실측으로 판정했고, 그 판정 로그 전체가 [`experiments_master.csv`](experiments_master.csv)에 남아 있습니다.
 
 ---
 
-## 1. 디렉터리 구조
+## 1. 시스템 아키텍처
 
-```
-common/          공용 라이브러리 (DRY 단일 소스, 서버 추론에도 복사됨)
-  io_utils.py    jsonl 로드, 14클래스 매핑, seed
-  serialize.py   dict→문자열 직렬화 (v1~v6). ⭐ v6 = 현재 최강
-  ad_lib.py      직렬화 + 추론 + 앙상블/스태커 (서버 script.py가 이걸 import)
-  cv.py          홀드아웃 8% + StratifiedGroupKFold(5), splits.npz 캐시
-  metrics.py     pooled-OOF macro-F1 (Dacon 공식정의와 일치)
-  postproc.py    per-class bias 좌표상승 후처리
-  vocab_prune.py 임베딩 프루닝 (id 리매핑, 250k→~50k 토큰, 모델 축소)
-  leak.py        (기각) 순차 지도 — 히든테스트 커버리지 0으로 검증 후 미사용
+1GB·600초 제약 안에서 성능을 최대화하기 위해 **3아키텍처 캐스케이드 앙상블 + int8 양자화 배포**를 설계했습니다.
 
-action_decision_maximum/src/
-  teacher_cli.py     교사 1구성 5-fold 학습 → 확률 npz만 저장 (증류/스택용)
-  train_full_cli.py  FULL-70k 멤버 학습 → 프루닝 → member_<TAG>.zip (배포용)
-  distill_cli.py     교사 OOF → student 증류
-
-sim/             오프라인 시뮬 + 패키징 + 자동화
-  package_ensemble.py  제출 zip 조립 (멤버+스태커+벤더링 lightgbm)
-  parity_check.py      ⭐제출 전 필수 — 홀드아웃 재현으로 버전오지정/순서교체 검출
-  run_offline_sim.py   네트워크 차단 설치+추론+메모리+스키마 검증
-  check_zip.py         구조/1GB/오프라인 최종 점검
-  babysit_*.sh         Colab 세션 자동 관리 (사망시 재기동, npz 증분 회수)
-  bench_t4.sh          실제 T4 추론 타이밍 벤치
-
-kaggle/          Kaggle 커널 트랙 (무료 GPU 30h/주)
-  launch.sh            데이터셋 업로드 + 커널 push 원커맨드
-  k_*/                 각 교사 커널 (script.py + kernel-metadata.json)
-
-eda/             분석 스크립트 (에러분석, 스크리닝, 스태킹 프로브)
-splits/          fold 인덱스 (전 팀원 공유, 커밋됨)
-PROJECT.md       ⭐ 전략·실험·의사결정 단일 소스 (매 실험 후 갱신)
-experiments_master.csv  실험 결과 원장
+```mermaid
+flowchart LR
+    A["세션 로그 입력<br/>(대화이력·워크스페이스 메타)"] --> B["v6 직렬화<br/>+ gen_rescue 절단복원<br/>+ 이력 12턴"]
+    B --> M1["m1: XLM-R-large<br/>soft-F1+FGM+SWA · int8"]
+    M1 --> G{"신뢰마진<br/>≥ 0.85?"}
+    G -- "예 (고신뢰 행)" --> P["예측"]
+    G -- "아니오" --> MIX["가중 앙상블 .45/.40/.15"]
+    M2["m2: mDeBERTa-v3"] --> MIX
+    M3["m3: KLUE-RoBERTa-large<br/>(한국어 특화) · int8"] --> MIX
+    MIX --> BIAS["macro-F1 최적 bias<br/>(로그공간 후처리, +0.010)"]
+    BIAS --> P
 ```
 
-**설계 원칙**: `common/`은 개발 공유(DRY), **제출 `model/`에 `common/ad_lib.py`를 복사**해 자체완결.
-직렬화/추론이 학습·서버에서 100% 동일하도록 단일 함수(`ad_lib.serialize`, `ad_lib.predict`)만 사용.
+- **양자화**: 대형 멤버 2개를 group-64 per-row **int8**로 압축해 3멤버를 921MB에 적재 (파리티 손실 ≈ 0)
+- **직렬화 수리(gen_rescue)**: 토큰 절단으로 소실되는 구조 헤더를 복원 — 단일 레버 기준 **+0.0031**
+- **학습 레시피**: soft-F1 서로게이트 손실(지표정합, w=0.5) + FGM 적대학습 + SWA — 셋 다 리더보드 실측 양전
+
+## 2. 이 캠페인이 실측으로 증명한 것들
+
+### 2-1. 전이법칙 — "오프라인에서 좋아 보여도, 히든에서 살아남는 기전은 따로 있다"
+
+교차검증 +0.005짜리 아이디어가 리더보드에서 음전하는 일이 반복되자, **모든 개입을 기전 클래스로 분류하고 클래스별 전이 여부를 실측**했습니다.
+
+![전이법칙](assets/transfer_law.png)
+
+- **강건화·지표정합**(FGM, soft-F1)만이 안정적으로 전이
+- **입력분포 정합**(gen_rescue)은 크게 전이하지만 1회성 — 같은 축의 두 번째 개선은 +0.0001 미만
+- **적합 강화**(에폭↑, 증류, 배치변경)는 전부 역전 — in-dist 과적합이 OOD를 훼손
+- **결정규칙 재조정**(앙상블 가중치·게이트·결합기·bias 재적합)은 **12전 12패** — 홀드아웃 튜닝은 히든에 전이하지 않는다
+
+### 2-2. 승자저주 — "최고 레시피 재현은 μ를 재현할 뿐이다"
+
+배포 멤버(0.79115)와 같은 레시피·다른 시드로 5번 재학습한 결과, 평균은 **0.7862**였습니다.
+즉 배포 멤버는 실력이 아니라 **+2.7σ의 행운 추첨**이었고, 이를 종반에야 알게 되어 GPU 슬롯을 낭비했습니다.
+→ 교훈: **캠페인 초반에 시드 분산(σ)부터 측정하라.**
+
+![승자저주](assets/winners_curse.png)
+
+### 2-3. SR 재양자화 지터 — GPU 없이 점수를 재추첨하는 발견
+
+마지막 밤의 발견: int8 양자화(결정론적 반올림, RTN)는 하나의 "실현"일 뿐이므로,
+fp16 원본을 **확률적 반올림(SR, 비편향)** 으로 재양자화하면 가중치의 25%가 ±1LSB 플립되어
+**기대성능이 같은 새로운 티켓**이 나옵니다. 9발 발사 결과 σ≈0.0002의 안정적 포켓을 형성했고,
+원본 RTN이 저추첨이었던 만큼을 회수해 **최종 +0.0005**를 확보했습니다.
+마지막 제출은 "검증된 행운의 m1은 고정, m3만 재추첨" 설계로 **~50% 확률 베팅을 적중**시키며 캠페인 최고점(0.7916517)으로 마무리했습니다.
+
+## 3. 운영 — AI 에이전트 함대와 사전등록 규율
+
+이 캠페인은 **Claude Code(멀티에이전트 워크플로우) + GPT 계열(codex) 교차검증**으로 운영됐습니다.
+
+- **매 판독마다** 다관점 패널(법의학/재계획/반증사냥)이 결과를 해석하고, 서로 다른 모델 계열이 상호 비판해 수렴
+- **사전등록**: 점수가 나오기 전에 분기표("X 이상이면 A, 이하면 B")·게이트 조건·버림서열을 등록 — 충격적인 판독(서로 다른 두 모델이 0.00006차 동률로 폭락)에도 감정적 이탈 없이 기계적으로 대응
+- **위기 프로토콜 실전 사례**: 동률 쇼크 → ①무결성 즉석검사 → ②500행 라벨 프로브(버그 vs 품질 분리) → ③단일변수 분리실험 → ④가설 4개에 사전확률·업데이트 규칙 등록 → 6시간 만에 원인 확정(분포 진실)
+- **밤샘 무인 운영**: PID 기반 학습감시·드라이버 붕괴 감지·자동 조립 파이프라인으로 GPU 2장을 13일간 유휴 없이 가동. 실사고 6건(이중발사·NVML 붕괴·큐 오발사·zip 레이스 등)을 전부 실시간 수습
+
+제출 파이프라인에는 실사고에서 배운 **6종 안전가드**(자기파괴 방지·캐시 신선도·메타 assert·byte-diff·용량·5행 런타임 캐너리)가 내장되어 있습니다.
+
+## 4. 레포 맵
+
+```
+├── README.md                      ← 이 문서
+├── experiments_master.csv         ← 91회 제출 전체의 실측·판정 원장 (단일 진실원천)
+├── assets/                        ← 차트
+├── common/                        ← 직렬화·앙상블 서빙·후처리·양자화 라이브러리
+│   ├── ad_lib.py                  ← 캐스케이드 서빙 코어 (마진게이트·멤버별 이력턴·dequant)
+│   └── serialize.py, postproc.py, vocab_prune.py, ...
+├── action_decision_maximum/src/   ← 학습 CLI (soft-F1·FGM·SWA·LLRD·gen_rescue, env로 전 옵션 제어)
+├── sim/                           ← 실험·분석 스크립트 (조립 파이프라인, SR지터 양자화, 프로브, 게이트)
+│   └── ops/                       ← 야간 학습 체인·발사 스크립트
+├── eda/                           ← 오류분석·베이즈플로어·라벨시프트 등 EDA
+├── docs/
+│   ├── RETROSPECTIVE_SKILLS_2026-07-15.md  ← 회고: 방법론·하네스·교훈 총정리
+│   └── archive/                   ← 캠페인 당시 작전문서·레드팀 보고서 원본
+└── .claude/skills/                ← 이 캠페인에서 추출한 재사용 Claude 스킬 7종
+```
+
+> 대회 데이터(`data/`)와 모델 가중치는 레포에 포함되지 않습니다 (Dacon 규정). 학습 재현은 `action_decision_maximum/src/train_full_cli.py`의 env 옵션 참조.
+
+## 5. 재사용 자산 — Claude 스킬 7종
+
+캠페인에서 검증된 절차를 다음 프로젝트에서 바로 쓸 수 있는 Claude Code 스킬로 추출했습니다 ([.claude/skills/](.claude/skills/)):
+
+| 스킬 | 요약 |
+|---|---|
+| `seed-sigma-first` | 캠페인 초반 σ·재현노이즈·승자저주 측정 프로토콜 |
+| `ml-transfer-audit` | 기전 클래스 기반 오프라인→실전 전이 감사 (SUBMIT/HOLD/DEAD) |
+| `submission-guards` | 제출물 조립 6종 안전가드 + 런타임 캐너리 |
+| `train-fleet-watch` | 장시간 GPU 학습 감시·함대 운영 수칙 |
+| `readout-protocol` | 판독 표준 프로토콜 + 충격판독 위기대응 5단계 |
+| `quant-jitter-tickets` | SR 재양자화 재추첨 기법 (구현 코드 포함) |
+| `endgame-slots` | 마감일 슬롯 경제학 + 최종선택 불변식 |
+
+## 6. 회고
+
+TOP-12에는 0.0044가 모자랐습니다. 결정적이었던 것은 기술이 아니라 **순서**였습니다 — 시드 분산을 마지막 날 밤에야 측정했고, 그때 이미 최고 점수가 +2.7σ 행운이라는 사실이 드러났습니다. 처음 이틀 안에 그 측정을 했다면 캠페인 후반의 슬롯 배분 전체가 달라졌을 것입니다.
+
+대신 이 캠페인은 **"측정이 전략을 이긴다"** 는 것을 91번의 실측으로 배우는 과정이었고, 그 배움 전부가 이 레포의 원장·회고·스킬로 남아 있습니다. 상세한 기술 회고는 [docs/RETROSPECTIVE_SKILLS_2026-07-15.md](docs/RETROSPECTIVE_SKILLS_2026-07-15.md)를 참고하세요.
 
 ---
 
-## 2. 학습 (GPU) — 두 가지 트랙
-
-로컬에 GPU가 없으므로 **Colab(주력) + Kaggle(무료 보조)** 로 학습한다.
-학습 산출물은 두 종류:
-- **교사 npz** (`teacher_<TAG>.npz`): 5-fold OOF/holdout 확률만 (~1MB). 스태킹·증류용.
-- **FULL 멤버 zip** (`member_<TAG>.zip`): 70k 전체 학습 + 프루닝된 배포용 가중치.
-
-### A) Colab CLI (주력, A100)
-
-```bash
-# google-colab-cli 설치 + 로그인은 각자 본인 계정으로 (OAuth)
-pip install google-colab-cli
-colab login
-
-# 교사 학습 (예: xlm-roberta-large, v6 직렬화, 6epoch, 5-fold)
-#   babysit_teacher.sh <NAME> <MODEL> <VER> <MAXLEN> <EP> <LR> <BATCH> <FGM> <fold_lo> <fold_hi> [GPU]
-bash sim/babysit_teacher.sh mylarge xlm-roberta-large v6 320 6 2e-5 64 0 0 5 A100
-
-# FULL 배포 멤버 학습 (프루닝 포함)
-#   babysit_full.sh <TAG> <MODEL> <EP> <LR> <BATCH> <PRUNE> <VER> [GPU]
-bash sim/babysit_full.sh mylarge_full xlm-roberta-large 8 2e-5 64 1 v6 A100
-```
-babysitter가 세션 사망 시 자동 재기동하고 npz/zip을 로컬로 증분 회수한다.
-환경변수 상세는 `action_decision_maximum/src/teacher_cli.py` 상단 docstring 참고.
-
-### B) Kaggle 커널 (무료 T4×2, 30h/주)
-
-```bash
-# 1) 본인 Kaggle API 토큰 준비 (아래 3장 참고)
-# 2) 데이터셋 업로드 + 교사 커널 발진
-bash kaggle/launch.sh          # USERNAME 자동 치환 → 데이터셋 생성 → 커널 push
-
-# 상태 확인 / 결과 회수
-export KAGGLE_API_TOKEN=$(cat ~/.kaggle/access_token)
-kaggle kernels status <username>/ad-kluev6-teacher
-kaggle kernels output <username>/ad-kluev6-teacher -p ./out   # teacher_*.npz 회수
-```
-⚠️ Kaggle 커널 GPU/인터넷은 **전화번호 인증 계정**에서만 활성화된다 (Settings → Phone verification).
-
----
-
-## 3. 인증 설정 (각자 본인 계정 — repo에 키 없음)
-
-**절대 키를 커밋하지 말 것.** `.gitignore`가 `kaggle.json`/`access_token`/`.env`를 차단하지만,
-근본적으로 인증 파일은 **홈 디렉터리**에 둔다.
-
-```bash
-# Kaggle (신형 KGAT 토큰 방식)
-mkdir -p ~/.kaggle
-echo "KGAT_xxxxxxxx" > ~/.kaggle/access_token && chmod 600 ~/.kaggle/access_token
-# CLI가 legacy kaggle.json도 요구하면:
-printf '{"username":"<본인아이디>","key":"KGAT_xxxxxxxx"}' > ~/.kaggle/kaggle.json && chmod 600 ~/.kaggle/kaggle.json
-
-# Colab: colab login (브라우저 OAuth) — 파일 저장 없음
-```
-
----
-
-## 4. 제출물 만들기
-
-```bash
-# 0) lightgbm 벤더링 (서버 오프라인 대비 — 최초 1회, vendor/는 gitignore됨)
-pip download lightgbm==4.6.0 --no-deps -d vendor/
-python3 -c "import zipfile,glob; zipfile.ZipFile(glob.glob('vendor/lightgbm-*.whl')[0]).extractall('vendor')"
-
-# 1) 스태커 적합 (교사 npz들로 — 멤버 조합 지정)
-python3 eda/fit_stacker.py artifacts/mystack klue largev6
-
-# 2) 패키징 (⚠️ 멤버별 직렬화 버전을 ::v4 / ::v6 로 반드시 명시!)
-python3 sim/package_ensemble.py --out submit_x --stacker artifacts/mystack \
-  --member action_decision_maximum/experiments/member_kluefull.zip::v4 \
-  --member action_decision_maximum/experiments/member_largev6full.zip::v6 \
-  --version v4 --max_len 320 --batch 128
-
-# 3) ⭐제출 전 필수 게이트 — 침묵 실패(버전 오지정/멤버 순서교체) 검출
-python3 sim/parity_check.py packages/submit_x 300     # holdout macro-F1이 기대치 근처인지
-python3 sim/run_offline_sim.py --model packages/submit_x/model --script packages/submit_x/script.py --n 400
-
-# → 둘 다 PASS면 packages/submit_x.zip 을 Dacon에 업로드
-```
-
-**핵심 함정** (PROJECT.md §5.14 감사 결과):
-- 멤버 zip엔 직렬화 버전 마커가 없다 → `::버전` 누락 시 크래시 없이 F1만 조용히 하락. **parity_check 필수.**
-- 스태커 멤버 순서 = `--member` 순서 = 스태커 학습 시 키 순서. 어긋나면 무증상 하락.
-- sklearn pickle 금지(서버 버전 상이). LightGBM은 텍스트 모델(`meta.lgb`). requirements.txt는 빈 파일(트랜스포머는 사전설치, lightgbm은 벤더링).
-
----
-
-## 5. 현재 상태 (요약 — 최신은 PROJECT.md)
-
-- **LB 최고 0.78051 (7위)** = **xlm-roberta-large v6 8ep FULL 단일모델 + per-class bias**. 컷(0.776) 돌파.
-- **핵심 반전(07-04)**: 앙상블/스태킹이 강한 large를 약멤버(klue·n-gram)로 **희석해 −0.014 훼손**. large 단독이 최강 → **스태킹 폐기**. (large단독 0.78051 vs klue+large+ngram 스택 0.76639)
-- 캘리브레이션: v4멤버는 `LB≈holdout−0.015`, v6-8ep FULL 배포는 `LB≈holdout+0.01~0.015`(교사OOF가 배포모델보다 약해 하한). **holdout gain은 LB로 부분전이만** → 신규 후처리는 ×0.2 할인.
-- 다음(0.80 목표, +0.020): **large 자체 강화** — 10ep+SWA / FGM / focal·logit-adjust / 강한 large끼리만의 앙상블. 각 fold0 raw macro-F1(0.7456@8ep)로 검증(희석 없어 LB 전이).
-- 전략 검증에 **codex(GPT-5.5) 자동 반박토론** 활용: `CODEX_CHALLENGE.md` 참고.
-
-### 배포 스크립트 지도 (신규)
-- `sim/package_single.py` — 단일모델 제출(현 최강 경로). `--member <zip>::v6 [--bias <teacher_npz>]`
-- `sim/package_ensemble.py` — 다멤버+스태커(현재는 비권장, 희석 확인됨)
-- `sim/parity_check.py` — 제출 전 필수: 버전오지정/순서교체 침묵실패 검출
-- `action_decision_maximum/src/train_full_cli.py` — FULL-70k 멤버 학습(+프루닝). `sim/babysit_full.sh <TAG> <MODEL> <EP> <LR> <BATCH> <PRUNE> <VER> [GPU]`
-
----
-
-## 6. 재현 체크리스트 (본선 코드검증 대비)
-
-- seed 고정, 상대경로, UTF-8, 버전 명시 (`transformers==4.46.3`, `numpy==1.26.4` 등)
-- `splits/splits.npz` 로 fold 고정 (재생성 금지)
-- 학습코드는 감사용, 추론코드(`model/` + `script.py`)는 채점에 그대로 사용됨
-- 외부 자원/모델 출처·라이선스 명시
+**Tech**: Python · PyTorch · HuggingFace Transformers · XLM-RoBERTa-large / mDeBERTa-v3 / KLUE-RoBERTa · int8 quantization · soft-F1 surrogate loss · FGM · SWA · Claude Code multi-agent orchestration

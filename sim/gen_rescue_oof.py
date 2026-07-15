@@ -27,7 +27,7 @@ from common import ad_lib  # noqa: E402
 from common.io_utils import load_train  # noqa: E402
 
 ROOT = L.ROOT
-SCRATCH = "/tmp/claude-0/-root-Action-Decision/4ad02a7b-69d3-4625-b907-25b364030498/scratchpad"
+SCRATCH = "/tmp/ad_work"
 
 
 def save_npz(path, oof, rows, y, fold, model, version, max_len):
